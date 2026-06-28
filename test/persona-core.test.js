@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 
 import {
   discoverPersonaProject,
+  createAgentScaffold,
   formatDoctorReport,
+  normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
   runDoctor,
@@ -280,4 +282,45 @@ Operator prompt.
   assert.doesNotMatch(scope.prompt, /Brand prompt/);
   assert.ok(!scope.docs.includes("docs/workstreams/brand/"));
   assert.ok(!scope.docs.includes("docs/workstreams/guideline/"));
+});
+
+test("createAgentScaffold writes a minimal user-facing agent file", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
+
+  const result = await createAgentScaffold(root, "Market Researcher");
+  const content = await readFile(result.filePath, "utf8");
+
+  assert.equal(result.agentName, "market-researcher");
+  assert.equal(result.relativePath, ".pi/agents/market-researcher.md");
+  assert.match(content, /^---\nname: market-researcher\n/m);
+  assert.match(content, /role: specialist/);
+  assert.match(content, /description: Market Researcher specialist\./);
+  assert.match(content, /tools: read/);
+  assert.match(content, /docs:\n/);
+  assert.match(content, /consults:\n/);
+  assert.match(content, /tags:\n/);
+  assert.match(content, /You are market-researcher\./);
+  assert.doesNotMatch(content, /defaultReads/);
+  assert.doesNotMatch(content, /systemPromptMode/);
+  assert.doesNotMatch(content, /inheritSkills/);
+
+  const project = await discoverPersonaProject(root);
+  assert.deepEqual(project.agents.map((agent) => agent.name), ["market-researcher"]);
+});
+
+test("createAgentScaffold refuses to overwrite existing agents", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
+
+  await createAgentScaffold(root, "writer");
+
+  await assert.rejects(
+    () => createAgentScaffold(root, "writer"),
+    /agent file already exists: .pi\/agents\/writer.md/,
+  );
+});
+
+test("normalizeAgentName creates stable pi-subagents compatible names", () => {
+  assert.equal(normalizeAgentName("Market Researcher"), "market-researcher");
+  assert.equal(normalizeAgentName("  Launch__Reviewer!! "), "launch-reviewer");
+  assert.throws(() => normalizeAgentName("!!!"), /agent name must contain at least one letter or number/);
 });
