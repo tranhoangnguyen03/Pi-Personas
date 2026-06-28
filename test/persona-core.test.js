@@ -5,12 +5,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildAgentLaunchRequest,
   discoverPersonaProject,
   createAgentScaffold,
+  formatPersonaList,
   formatDoctorReport,
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
+  runSubagentBridgeRequest,
   runDoctor,
 } from "../src/persona/index.js";
 
@@ -70,6 +73,33 @@ Guideline prompt.
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline doc\n");
 
   return root;
+}
+
+function createEventBus(onRequest) {
+  const handlers = new Map();
+  const emitted = [];
+
+  return {
+    emitted,
+    on(event, handler) {
+      const eventHandlers = handlers.get(event) ?? [];
+      eventHandlers.push(handler);
+      handlers.set(event, eventHandlers);
+      return () => {
+        const next = (handlers.get(event) ?? []).filter((candidate) => candidate !== handler);
+        handlers.set(event, next);
+      };
+    },
+    emit(event, data) {
+      emitted.push({ event, data });
+      if (event === "subagent:slash:request" && onRequest) {
+        onRequest(data, this);
+      }
+      for (const handler of handlers.get(event) ?? []) {
+        handler(data);
+      }
+    },
+  };
 }
 
 test("discovers launchable project agents and keeps baseline as control file", async () => {
@@ -282,6 +312,121 @@ Operator prompt.
   assert.doesNotMatch(scope.prompt, /Brand prompt/);
   assert.ok(!scope.docs.includes("docs/workstreams/brand/"));
   assert.ok(!scope.docs.includes("docs/workstreams/guideline/"));
+});
+
+test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", async () => {
+  const root = await createWorkspace();
+  const scope = await resolveAgentScope(root, "brand");
+
+  const launch = buildAgentLaunchRequest(scope, {
+    task: "Draft a short launch message.",
+  });
+
+  assert.equal(launch.agentName, "brand");
+  assert.equal(launch.context, "fresh");
+  assert.deepEqual(launch.docs, [
+    "docs/shared/",
+    "docs/workstreams/brand/",
+  ]);
+  assert.deepEqual(launch.tools, ["read"]);
+  assert.deepEqual(launch.consults, ["guideline"]);
+  assert.deepEqual(launch.subagentParams, {
+    agent: "brand",
+    task: launch.subagentParams.task,
+    clarify: false,
+    agentScope: "both",
+    context: "fresh",
+  });
+  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/, docs\/workstreams\/brand\/\]/);
+  assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
+  assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
+  assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
+});
+
+test("formatPersonaList shows read-only discovery details", async () => {
+  const root = await createWorkspace();
+  const project = await discoverPersonaProject(root);
+
+  const output = formatPersonaList(project);
+
+  assert.match(output, /# Pi Personas/);
+  assert.match(output, /generalist - generalist/);
+  assert.match(output, /Routes to specialists\./);
+  assert.match(output, /docs: docs\/shared\//);
+  assert.match(output, /consults: all/);
+  assert.match(output, /brand - specialist/);
+  assert.match(output, /docs: docs\/workstreams\/brand\//);
+  assert.match(output, /consults: guideline/);
+  assert.doesNotMatch(output, /launch/i);
+});
+
+test("runSubagentBridgeRequest emits a pi-subagents slash request", async () => {
+  const params = {
+    agent: "brand",
+    task: "Task",
+    clarify: false,
+    agentScope: "both",
+    context: "fresh",
+  };
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    events.emit("subagent:slash:response", {
+      requestId: request.requestId,
+      result: { content: [{ type: "text", text: "done" }], details: { mode: "single", results: [] } },
+      isError: false,
+    });
+  });
+
+  const response = await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    params,
+    { requestId: "phase4-request" },
+  );
+
+  assert.equal(response.isError, false);
+  assert.equal(bus.emitted[0].event, "subagent:slash:request");
+  assert.equal(bus.emitted[0].data.requestId, "phase4-request");
+  assert.deepEqual(bus.emitted[0].data.params, params);
+});
+
+test("runSubagentBridgeRequest rejects when the pi-subagents bridge is absent", async () => {
+  const bus = createEventBus();
+
+  await assert.rejects(
+    () => runSubagentBridgeRequest(
+      { events: bus },
+      { cwd: "/tmp/example" },
+      { agent: "brand", task: "Task", context: "fresh" },
+      { requestId: "missing-bridge" },
+    ),
+    /pi-subagents slash bridge did not respond/,
+  );
+});
+
+test("runSubagentBridgeRequest ignores responses for other request ids", async () => {
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    events.emit("subagent:slash:response", {
+      requestId: "other-request",
+      result: { content: [{ type: "text", text: "wrong" }], details: { mode: "single", results: [] } },
+      isError: false,
+    });
+    events.emit("subagent:slash:response", {
+      requestId: request.requestId,
+      result: { content: [{ type: "text", text: "right" }], details: { mode: "single", results: [] } },
+      isError: false,
+    });
+  });
+
+  const response = await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    { requestId: "matching-request" },
+  );
+
+  assert.equal(response.result.content[0].text, "right");
 });
 
 test("createAgentScaffold writes a minimal user-facing agent file", async () => {
