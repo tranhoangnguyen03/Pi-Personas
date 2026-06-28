@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { discoverPersonaProject, pathExists } from "./agents.js";
-import { uniqueStrings } from "./frontmatter.js";
+import { validatePersonaSchema } from "./schema.js";
 
 const KNOWN_TOOLS = new Set([
   "read",
@@ -25,7 +25,7 @@ export async function runDoctor(root, options = {}) {
 
   collectDependencyIssues(dependencyStatus, issues);
   collectParseIssues(project, issues);
-  collectControlFileIssues(project, issues);
+  issues.push(...validatePersonaSchema(project));
   collectDuplicateNameIssues(project, issues);
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
@@ -44,33 +44,6 @@ export async function runDoctor(root, options = {}) {
     dependencies: dependencyStatus,
     project,
     issues,
-  };
-}
-
-export async function resolveAgentPreview(root, agentName) {
-  const project = await discoverPersonaProject(root);
-  const agent = project.agents.find((candidate) => candidate.name === agentName);
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
-
-  const baseline = project.baseline?.frontmatter ?? {};
-  const docs = uniqueStrings([
-    ...(baseline.docs ?? []),
-    ...(agent.docs ?? []),
-  ]);
-  const tools = uniqueStrings([
-    ...(baseline.tools ?? []),
-    ...(agent.tools ?? []),
-  ]);
-
-  return {
-    agent,
-    baseline: project.baseline,
-    docs,
-    tools,
-    consults: agent.consults,
-    derived: {
-      defaultReads: docs,
-    },
   };
 }
 
@@ -159,18 +132,6 @@ function collectParseIssues(project, issues) {
       issues.push({
         severity: "error",
         message: parseError,
-      });
-    }
-  }
-}
-
-function collectControlFileIssues(project, issues) {
-  for (const file of project.controlFiles) {
-    if (file.frontmatter.name && file.frontmatter.description) {
-      issues.push({
-        severity: "error",
-        file: file.relativePath,
-        message: `${file.relativePath}: control file is launchable; remove name or description`,
       });
     }
   }

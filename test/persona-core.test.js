@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   discoverPersonaProject,
   formatDoctorReport,
+  resolveAgentScope,
   resolveAgentPreview,
   runDoctor,
 } from "../src/persona/index.js";
@@ -173,4 +174,110 @@ test("formats doctor report with actionable sections", async () => {
   assert.match(report, /Agents: 3 launchable/);
   assert.match(report, /Generalist: generalist/);
   assert.match(report, /Status: pass/);
+});
+
+test("doctor reports schema errors without relying on pi-subagents failure", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/missing-description.md"), `---
+name: missing-description
+role: specialist
+tools: read
+docs: docs/shared/
+---
+Missing description prompt.
+`);
+
+  await writeText(path.join(root, ".pi/agents/unknown-role.md"), `---
+name: unknown-role
+role: executive
+description: Invalid role.
+tools: read
+docs: docs/shared/
+---
+Unknown role prompt.
+`);
+
+  await writeText(path.join(root, ".pi/agents/specialist-all.md"), `---
+name: specialist-all
+role: specialist
+description: Specialist with invalid all consult.
+tools: read
+docs: docs/shared/
+consults: all
+---
+Specialist all prompt.
+`);
+
+  await writeText(path.join(root, ".pi/agents/runtime-leak.md"), `---
+name: runtime-leak
+role: specialist
+description: Agent with runtime-only fields.
+tools: read
+docs: docs/shared/
+defaultReads: docs/shared/
+systemPromptMode: replace
+inheritSkills: false
+---
+Runtime leak prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  const messages = result.issues.map((issue) => issue.message);
+  assert.equal(result.status, "error");
+  assert.ok(messages.some((message) => message.includes("missing required field 'description'")));
+  assert.ok(messages.some((message) => message.includes("unknown role 'executive'")));
+  assert.ok(messages.some((message) => message.includes("specialist cannot use consults: all")));
+  assert.ok(messages.some((message) => message.includes("runtime-only field 'defaultReads'")));
+  assert.ok(messages.some((message) => message.includes("runtime-only field 'systemPromptMode'")));
+  assert.ok(messages.some((message) => message.includes("runtime-only field 'inheritSkills'")));
+});
+
+test("resolveAgentScope merges baseline and selected agent only", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/operator.md"), `---
+name: operator
+role: specialist
+description: Operations specialist.
+tools: write
+docs: docs/workstreams/operator/
+consults: brand
+tags: operations
+---
+Operator prompt.
+`);
+
+  await writeText(path.join(root, "docs/workstreams/operator/runbook.md"), "Operator doc\n");
+
+  const scope = await resolveAgentScope(root, "operator");
+
+  assert.equal(scope.agent.name, "operator");
+  assert.equal(scope.baseline.fileName, "_baseline.md");
+  assert.deepEqual(scope.docs, [
+    "docs/shared/",
+    "docs/workstreams/operator/",
+  ]);
+  assert.deepEqual(scope.tools, [
+    "read",
+    "write",
+  ]);
+  assert.deepEqual(scope.consults, [
+    "brand",
+  ]);
+  assert.deepEqual(scope.derived.defaultReads, [
+    "docs/shared/",
+    "docs/workstreams/operator/",
+  ]);
+  assert.match(scope.prompt, /Shared operating context/);
+  assert.match(scope.prompt, /Operator prompt/);
+  assert.doesNotMatch(scope.prompt, /Brand prompt/);
+  assert.ok(!scope.docs.includes("docs/workstreams/brand/"));
+  assert.ok(!scope.docs.includes("docs/workstreams/guideline/"));
 });
