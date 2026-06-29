@@ -79,6 +79,29 @@ rtk pi list
 rtk pi --no-extensions --extension /Users/davidus-tranus/.pi/agent/npm/node_modules/pi-subagents/src/extension/index.ts --extension /Users/davidus-tranus/.pi/agent/npm/node_modules/pi-intercom/index.ts --no-session --approve --mode json -p "/subagents-doctor"
 ```
 
+Project-local package activation proof:
+
+```bash
+rtk pi install . -l --approve
+rtk pi list
+```
+
+`rtk pi list` must show this repo under `Project packages`. Installing the
+repo into `~/.pi/agent/npm` alone is not sufficient; Pi slash command discovery
+is driven by Pi package settings. For this repo, local activation is recorded in
+`.pi/settings.json` as:
+
+```json
+{
+  "packages": [
+    ".."
+  ]
+}
+```
+
+After activation, start a new Pi session before checking the slash command
+listing, because command registration happens during session startup.
+
 Default extension discovery failed on unrelated local extension pollution:
 
 ```text

@@ -7,6 +7,7 @@ import {
   formatPersonaList,
   resolveAgentLaunchRequest,
   runDoctor,
+  sendPersonaOutput,
   runSubagentBridgeRequest,
 } from "../src/persona/index.js";
 
@@ -40,16 +41,9 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, { task: args });
           const response = await runSubagentBridgeRequest(pi, ctx, launch.subagentParams);
           const text = bridgeResponseText(response);
-          if (typeof pi.sendMessage === "function") {
-            pi.sendMessage({
-              content: `## ${agentName}\n\n${text}`,
-              display: true,
-            });
-          } else {
-            ctx.ui.notify(text, response.isError ? "error" : "info");
-          }
+          sendPersonaOutput(pi, ctx, `## ${agentName}\n\n${text}`, response.isError ? "error" : "info");
         } catch (error) {
-          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
       },
     });
@@ -82,7 +76,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         const result = await runDoctor(ctx.cwd);
         const report = formatDoctorReport(result);
         const level = result.status === "error" ? "error" : result.status === "warning" ? "warning" : "info";
-        ctx.ui.notify(report, level);
+        sendPersonaOutput(pi, ctx, report, level);
         return;
       }
 
@@ -95,14 +89,14 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         try {
           const result = await createAgentScaffold(ctx.cwd, rawName);
           registerPersonaCommand(result.agentName);
-          ctx.ui.notify(`Created ${result.relativePath}`, "info");
+          sendPersonaOutput(pi, ctx, `Created ${result.relativePath}`, "info");
         } catch (error) {
-          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
         return;
       }
 
-      ctx.ui.notify("Usage: /persona doctor or /persona new <name>", "info");
+      sendPersonaOutput(pi, ctx, "Usage: /persona doctor or /persona new <name>", "info");
     },
   });
 
@@ -111,9 +105,9 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       try {
         const project = await registerProjectCommands(ctx.cwd);
-        ctx.ui.notify(formatPersonaList(project), "info");
+        sendPersonaOutput(pi, ctx, formatPersonaList(project), "info");
       } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
       }
     },
   });

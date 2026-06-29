@@ -2,6 +2,7 @@ export { parseFrontmatterDocument, splitList, uniqueStrings } from "./frontmatte
 export { discoverPersonaProject } from "./agents.js";
 export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
+export { sendPersonaOutput } from "./pi-output.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export { createAgentScaffold, normalizeAgentName, renderAgentScaffold } from "./scaffold.js";
 export { validatePersonaSchema } from "./schema.js";

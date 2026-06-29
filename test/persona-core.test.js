@@ -16,6 +16,7 @@ import {
   resolveAgentPreview,
   runSubagentBridgeRequest,
   runDoctor,
+  sendPersonaOutput,
 } from "../src/persona/index.js";
 
 async function writeText(filePath, text) {
@@ -117,6 +118,31 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.doesNotMatch(source, /registerCommand\("agent"/);
   assert.match(source, /\/persona doctor/);
   assert.doesNotMatch(source, /\/agent doctor/);
+});
+
+test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
+  const messages = [];
+  const notifications = [];
+
+  sendPersonaOutput(
+    {
+      sendMessage(message) {
+        messages.push(message);
+      },
+    },
+    {
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+      },
+    },
+    "Doctor report",
+    "info",
+  );
+
+  assert.deepEqual(messages, [{ content: "Doctor report", display: true }]);
+  assert.deepEqual(notifications, []);
 });
 
 test("discovers launchable project agents and keeps baseline as control file", async () => {
