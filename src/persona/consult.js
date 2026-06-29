@@ -1,5 +1,6 @@
 import { discoverPersonaProject } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
+import { buildScopedSubagentParams } from "./runtime.js";
 
 export function buildConsultEnvelope(input) {
   const requester = requireText(input.requester, "requester");
@@ -34,17 +35,7 @@ export async function resolveConsultLaunchRequest(root, input) {
     consultant: consultant.name,
   });
   const task = buildConsultTask(consultantScope, envelope);
-  const subagentParams = {
-    agent: consultant.name,
-    task,
-    clarify: false,
-    agentScope: "both",
-    context: envelope.consult.context,
-  };
-
-  if (consultantScope.agent.model) {
-    subagentParams.model = consultantScope.agent.model;
-  }
+  const subagentParams = buildScopedSubagentParams(consultantScope, task, { context: envelope.consult.context });
 
   return {
     requester,

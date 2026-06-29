@@ -705,6 +705,7 @@ test("resolveRoundtableLaunchRequest builds a pi-subagents chain with two specia
 name: pricing
 role: specialist
 description: Pricing strategy specialist.
+model: openai/gpt-5
 tools: read
 docs: docs/workstreams/pricing/
 consults:
@@ -729,6 +730,12 @@ Pricing prompt.
   assert.equal(roundtable.subagentParams.chain[0].parallel.length, 3);
   assert.equal(roundtable.subagentParams.chain[1].parallel.length, 3);
   assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
+  const pricingRoundOne = roundtable.subagentParams.chain[0].parallel.find((step) => step.agent === "pricing");
+  const brandRoundTwo = roundtable.subagentParams.chain[1].parallel.find((step) => step.agent === "brand");
+  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/", "docs/workstreams/pricing/"]);
+  assert.equal(pricingRoundOne.model, "openai/gpt-5");
+  assert.deepEqual(brandRoundTwo.reads, ["docs/shared/", "docs/workstreams/brand/"]);
+  assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/"]);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Do not call persona_consult or subagent/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);

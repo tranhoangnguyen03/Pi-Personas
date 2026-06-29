@@ -1,4 +1,5 @@
 import { resolveAgentScope } from "./resolver.js";
+import { buildScopedSubagentParams } from "./runtime.js";
 
 const DEFAULT_EMPTY_TASK = "Start a fresh scoped persona session. Ask the user what they need if no request was supplied.";
 
@@ -6,17 +7,7 @@ export function buildAgentLaunchRequest(scope, options = {}) {
   const context = options.context === "fork" ? "fork" : "fresh";
   const userTask = normalizeTask(options.task);
   const task = buildLaunchTask(scope, userTask);
-  const subagentParams = {
-    agent: scope.agent.name,
-    task,
-    clarify: false,
-    agentScope: "both",
-    context,
-  };
-
-  if (scope.agent.model) {
-    subagentParams.model = scope.agent.model;
-  }
+  const subagentParams = buildScopedSubagentParams(scope, task, { context });
 
   return {
     agentName: scope.agent.name,

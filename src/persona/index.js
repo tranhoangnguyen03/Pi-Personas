@@ -15,6 +15,7 @@ export {
   resolveRoundtableLaunchRequest,
   selectRoundtableRoster,
 } from "./roundtable.js";
+export { buildScopedSubagentParams, buildScopedSubagentStep } from "./runtime.js";
 export { createAgentScaffold, normalizeAgentName, renderAgentScaffold } from "./scaffold.js";
 export { validatePersonaSchema } from "./schema.js";
 export { runSubagentBridgeRequest, SUBAGENT_SLASH_EVENTS } from "./subagent-bridge.js";

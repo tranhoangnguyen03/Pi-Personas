@@ -1,5 +1,6 @@
 import { discoverPersonaProject } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
+import { buildScopedSubagentStep } from "./runtime.js";
 
 const MAX_ROSTER_SIZE = 5;
 
@@ -79,22 +80,21 @@ function buildRoundtableChain({ query, generalist, generalistScope, roster, scop
   return [
     {
       phase: "Round 1",
-      parallel: roster.map((agent) => ({
-        agent: agent.name,
-        task: buildRoundOneTask(scopes.get(agent.name), query, roster),
-      })),
+      parallel: roster.map((agent) => {
+        const scope = scopes.get(agent.name);
+        return buildScopedSubagentStep(scope, buildRoundOneTask(scope, query, roster));
+      }),
     },
     {
       phase: "Round 2",
-      parallel: roster.map((agent) => ({
-        agent: agent.name,
-        task: buildRoundTwoTask(scopes.get(agent.name), query, roster),
-      })),
+      parallel: roster.map((agent) => {
+        const scope = scopes.get(agent.name);
+        return buildScopedSubagentStep(scope, buildRoundTwoTask(scope, query, roster));
+      }),
     },
     {
       phase: "Synthesis",
-      agent: generalist.name,
-      task: buildSynthesisTask(generalistScope, query, roster),
+      ...buildScopedSubagentStep(generalistScope, buildSynthesisTask(generalistScope, query, roster)),
     },
   ];
 }
