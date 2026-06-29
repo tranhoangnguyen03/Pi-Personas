@@ -152,7 +152,19 @@ test("extension registers persona-roundtable as a namespaced command", async () 
   assert.doesNotMatch(source, /registerCommand\("roundtable"/);
   assert.match(source, /createRoundtableProgress/);
   assert.match(source, /onUpdate/);
-  assert.match(source, /setStatus(?:\?\.)?\("pi-persona-roundtable"/);
+  assert.match(source, /statusKey:\s*"pi-persona-roundtable"/);
+  assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
+});
+
+test("extension shows visible progress for direct persona launches", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+
+  assert.match(source, /createPersonaLaunchProgress/);
+  assert.match(source, /Launching \$\{agentName\}/);
+  assert.match(source, /Persona is running/);
+  assert.match(source, /onUpdate\(update: unknown\)/);
+  assert.match(source, /statusKey:\s*"pi-persona-launch"/);
+  assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
