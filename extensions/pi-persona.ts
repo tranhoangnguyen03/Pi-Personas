@@ -17,6 +17,7 @@ const RESERVED_COMMANDS = new Set([
   "compact",
   "fork",
   "parallel",
+  "persona",
   "persona-list",
   "resume",
   "run",
@@ -71,8 +72,8 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     }
   });
 
-  pi.registerCommand("agent", {
-    description: "Pi Persona commands. Supports: /agent doctor, /agent new <name>",
+  pi.registerCommand("persona", {
+    description: "Pi Persona commands. Supports: /persona doctor, /persona new <name>",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
@@ -88,7 +89,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       if (subcommand === "new") {
         const rawName = trimmed.slice("new".length).trim();
         if (!rawName) {
-          ctx.ui.notify("Usage: /agent new <name>", "error");
+          ctx.ui.notify("Usage: /persona new <name>", "error");
           return;
         }
         try {
@@ -101,7 +102,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify("Usage: /agent doctor or /agent new <name>", "info");
+      ctx.ui.notify("Usage: /persona doctor or /persona new <name>", "info");
     },
   });
 

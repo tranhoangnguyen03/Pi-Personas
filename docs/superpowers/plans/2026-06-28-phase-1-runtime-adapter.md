@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the first pi-persona implementation slice: a thin runtime adapter and `/agent doctor` command that validate project persona files against the Phase 0 runtime contract.
+**Goal:** Build the first pi-persona implementation slice: a thin runtime adapter and `/persona doctor` command that validate project persona files against the Phase 0 runtime contract.
 
-**Architecture:** Keep the implementation small and testable. Pure ESM modules parse `.pi/agents/**/*.md`, validate schema/docs/tools/consults, and resolve an agent preview. A tiny Pi extension wrapper registers `/agent doctor` and calls the pure modules using `ctx.cwd`.
+**Architecture:** Keep the implementation small and testable. Pure ESM modules parse `.pi/agents/**/*.md`, validate schema/docs/tools/consults, and resolve an agent preview. A tiny Pi extension wrapper registers `/persona doctor` and calls the pure modules using `ctx.cwd`.
 
 **Tech Stack:** Node.js ESM, built-in `node:test`, Pi extension TypeScript wrapper, no external runtime dependencies.
 
@@ -18,9 +18,9 @@ Phase 1 includes:
 - User-facing pi-persona schema parser.
 - Project agent discovery from `.pi/agents/**/*.md`.
 - `_baseline.md` control-file handling.
-- `/agent doctor` report generation.
+- `/persona doctor` report generation.
 - Resolver preview for one agent.
-- Pi command wrapper for `/agent doctor`.
+- Pi command wrapper for `/persona doctor`.
 
 Phase 1 excludes:
 
@@ -66,7 +66,7 @@ Phase 1 excludes:
 ### Task 4: Pi Command Wrapper
 
 - [x] Add `extensions/pi-persona.ts`.
-- [x] Register `/agent doctor`.
+- [x] Register `/persona doctor`.
 - [x] Format doctor output for `ctx.ui.notify`.
 - [x] Run static import smoke checks.
 

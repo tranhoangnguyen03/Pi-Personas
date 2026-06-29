@@ -110,6 +110,15 @@ test("package manifest exposes Pi Persona as a Pi extension package", async () =
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-persona.ts"]);
 });
 
+test("extension uses the persona command namespace instead of generic agent", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+
+  assert.match(source, /registerCommand\("persona"/);
+  assert.doesNotMatch(source, /registerCommand\("agent"/);
+  assert.match(source, /\/persona doctor/);
+  assert.doesNotMatch(source, /\/agent doctor/);
+});
+
 test("discovers launchable project agents and keeps baseline as control file", async () => {
   const root = await createWorkspace();
 

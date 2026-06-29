@@ -148,7 +148,7 @@ Runtime contract:
 - `pi-subagents` executes the resolved child runs.
 - `pi-intercom` is used only for supervisor contact while a child is running,
   not as the ordinary result transport.
-- If Pi cannot hard-enforce doc or tool boundaries, `/agent doctor` must say so
+- If Pi cannot hard-enforce doc or tool boundaries, `/persona doctor` must say so
   plainly. The extension should still only load and declare the resolved scope.
 
 Non-goal: building a second agent platform beside Pi. DRY, SOC, and KISS apply:
@@ -189,8 +189,8 @@ docs/
 
 `.pi/agents/**/*.md` is the single project-level agent surface. Pi Persona
 agents should be usable by `pi-subagents` directly. Pi Persona may add
-frontmatter fields such as `role`, `docs`, `consults`, and `tags`, but `/agent
-doctor` must verify that the resulting files remain compatible with
+frontmatter fields such as `role`, `docs`, `consults`, and `tags`, but
+`/persona doctor` must verify that the resulting files remain compatible with
 `pi-subagents` discovery.
 
 Files prefixed with `_`, such as `_baseline.md`, are pi-persona control files,
@@ -316,7 +316,7 @@ Pi Persona Agents requires:
 - `pi-intercom`
 
 The setup path should install or verify both packages through Pi's normal
-package ecosystem. `/agent doctor` should fail early if either package is
+package ecosystem. `/persona doctor` should fail early if either package is
 missing, disabled, or not visible to the active Pi session.
 
 After dependencies are present, pi-persona should enforce project-level agent
@@ -343,13 +343,13 @@ Users should be able to define agents in three ways:
 
 1. **Conversational authoring.** In a normal Pi session, the user says what role
    they want. The `agent-authoring` skill writes or edits the agent file.
-2. **Scaffold command.** `/agent new <name>` creates a minimal valid agent file.
+2. **Scaffold command.** `/persona new <name>` creates a minimal valid agent file.
 3. **Manual editing.** The user edits `.pi/agents/<name>.md` directly.
 
 Agent files must remain launchable through `pi-subagents`. Pi Persona may add
 semantic fields, but it should not create a second agent registry.
 
-`/agent new <name>` should scaffold only the user-facing fields:
+`/persona new <name>` should scaffold only the user-facing fields:
 
 - `name`
 - `role`
@@ -386,7 +386,7 @@ Recommended pattern:
 - Put universal references in `docs/shared/`.
 - Put agent-specific references in `docs/workstreams/<domain>/`.
 - Reference those paths in `_baseline.md` or the relevant agent file.
-- Run `/agent doctor` to confirm paths exist and are readable by Pi.
+- Run `/persona doctor` to confirm paths exist and are readable by Pi.
 
 Document deployment is intentionally file-native. Users can use git, sync
 folders, shared drives, generated markdown, PDFs, or whatever Pi can already
@@ -403,7 +403,7 @@ Recommended pattern:
 - Install or enable tools through Pi's normal ecosystem.
 - Add the tool name to `_baseline.md` if every agent should have it.
 - Add the tool name to one specialist if it is domain-specific.
-- Run `/agent doctor` to catch unknown tool names.
+- Run `/persona doctor` to catch unknown tool names.
 
 If Pi supports project-local tools, the extension may provide a thin helper to
 link those tools into agent files. If Pi does not, tool setup remains external
@@ -690,9 +690,9 @@ round-tables, and let users correct course.
 
 ---
 
-## 14. Validation: `/agent doctor`
+## 14. Validation: `/persona doctor`
 
-`/agent doctor` checks only the things the extension can know cheaply and
+`/persona doctor` checks only the things the extension can know cheaply and
 reliably:
 
 - `pi-subagents` is installed, enabled, and discovering project agents.
@@ -736,7 +736,7 @@ It should support:
 - Edit an existing agent's tools, docs, consults, tags, or body.
 - Move docs between baseline and specialist scope.
 - Suggest tags from the description and docs path.
-- Run `/agent doctor` after edits.
+- Run `/persona doctor` after edits.
 - Preserve user wording unless cleanup is necessary.
 - Preserve `pi-subagents` compatibility while adding pi-persona metadata.
 
@@ -807,7 +807,7 @@ Step 14 makes the user's initial operating layer real.
 | Discourse protocol | Independent, reveal/revise, synthesize |
 | Supervisor bridge | `pi-intercom/contact_supervisor` only for blocked or plan-changing updates |
 | Routing | Simple first; optimize only after user-reported misses |
-| Validation | Cheap structural checks through `/agent doctor` |
+| Validation | Cheap structural checks through `/persona doctor` |
 
 ---
 
@@ -819,7 +819,7 @@ features.
 ### Phase 1 - Runtime Adapter
 
 **Test 1.1 - Required dependency audit.**
-Run `/agent doctor` in a session with both packages installed and in a session
+Run `/persona doctor` in a session with both packages installed and in a session
 where one package is missing or disabled. Pass: both required packages are
 detected when present; missing or disabled dependency produces a blocking,
 actionable error.
@@ -829,7 +829,7 @@ Create a valid `.pi/agents/<name>.md` persona file. Pass: `pi-subagents`
 discovers it as a project-level agent, while `_baseline.md` is not launchable.
 
 **Test 1.3 - Tool discovery.**
-Reference one known Pi tool and one fake tool. Run `/agent doctor`. Pass: the
+Reference one known Pi tool and one fake tool. Run `/persona doctor`. Pass: the
 known tool passes if Pi exposes discovery; the fake tool gets an actionable
 warning or error.
 
@@ -839,7 +839,7 @@ behavior matches Pi and filesystem permissions, with no extra pi-persona write
 gate.
 
 **Test 1.5 - Runtime support role provenance.**
-Copy a `pi-subagents` builtin into `.pi/agents/runtime/`. Pass: `/agent doctor`
+Copy a `pi-subagents` builtin into `.pi/agents/runtime/`. Pass: `/persona doctor`
 reports provenance and, when feasible, drift against the installed builtin.
 
 ### Phase 2 - Schema, Resolver, Baseline
@@ -863,16 +863,16 @@ Ask Pi to create a new specialist for a concrete workstream. Pass: a valid
 `.pi/agents/<name>.md` file is created with docs, tools, tags, and body.
 
 **Test 3.2 - Minimal scaffold.**
-Run `/agent new <name>`. Pass: the file contains only user-facing fields and a
+Run `/persona new <name>`. Pass: the file contains only user-facing fields and a
 prompt body; runtime adapter fields are omitted.
 
 **Test 3.3 - Doc deployment.**
 Add a file under `docs/workstreams/<domain>/`, reference it from an agent, and
-run `/agent doctor`. Pass: the path validates and appears in resolver preview.
+run `/persona doctor`. Pass: the path validates and appears in resolver preview.
 
 **Test 3.4 - Tool deployment.**
 Enable a Pi tool through Pi's normal tool setup, reference it from an agent, and
-run `/agent doctor`. Pass: the tool resolves or the limitation is clearly
+run `/persona doctor`. Pass: the tool resolves or the limitation is clearly
 reported if Pi cannot expose discovery.
 
 ### Phase 4 - Direct Launch
@@ -984,7 +984,7 @@ Add a new specialist file. Pass: existing agents keep working; the new agent
 appears in `/persona-list` and can be launched directly with `/<agent-name>`.
 
 **Test 7.4 - Duplicate generalist.**
-Create a second generalist. Pass: `/agent doctor` flags it and resolver refuses
+Create a second generalist. Pass: `/persona doctor` flags it and resolver refuses
 ambiguous launch.
 
 ---
@@ -997,7 +997,7 @@ These are implementation questions, not product blockers:
 - What is the cleanest programmatic call path into `pi-subagents` for direct
   launch, consult, parallel round-table, status, resume, and interrupt?
 - Does `pi-subagents` tolerate all pi-persona metadata fields directly, or
-  should `/agent doctor` constrain field shape more tightly?
+  should `/persona doctor` constrain field shape more tightly?
 - What is the exact convention for excluding `_baseline.md` from launchable
   project agents?
 - Should copied runtime support roles use `package: runtime`, another package

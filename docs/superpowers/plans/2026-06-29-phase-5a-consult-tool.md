@@ -529,10 +529,10 @@ Expected: tests pass, audit reports 0 vulnerabilities, diff check is clean.
 In a fresh Pi session after reinstalling or reloading the local package:
 
 ```text
-/agent doctor
+/persona doctor
 /persona-list
-/agent new phase5-requester
-/agent new phase5-consultant
+/persona new phase5-requester
+/persona new phase5-consultant
 ```
 
 Edit `.pi/agents/phase5-requester.md`:
@@ -549,7 +549,7 @@ Leave `tools:` blank unless deliberately narrowing tools. Then start a new Pi se
 
 Pass criteria:
 
-- `/agent doctor` is handled by Pi Persona, not by the generic `subagent` doctor.
+- `/persona doctor` is handled by Pi Persona, not by the generic `subagent` doctor.
 - `/persona-list` is handled by Pi Persona and lists both phase5 agents.
 - `/phase5-requester` launches through pi-subagents.
 - The requester calls `persona_consult`.

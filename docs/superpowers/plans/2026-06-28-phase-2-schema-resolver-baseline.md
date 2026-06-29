@@ -27,7 +27,7 @@ Phase 2 excludes:
 - Consult orchestration.
 - Round-table.
 - `/persona-list`.
-- `/agent new`.
+- `/persona new`.
 
 ## Files
 
