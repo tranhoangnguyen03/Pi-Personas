@@ -578,3 +578,34 @@ rtk git commit -m "docs: record phase 5a consult verification"
 - Spec coverage: Covers Phase 5 consult envelope, default summarized/fresh behavior, fork opt-in, permission checks, consultant scoping, provenance, and Pi tool registration.
 - Known gap: Hard nested-consult runtime blocking is explicitly outside this 5A slice because it needs live Pi session metadata or a reliable consult-depth marker.
 - Type consistency: Public function names are `buildConsultEnvelope`, `resolveConsultLaunchRequest`, and `formatConsultProvenance`; tool name is `persona_consult`.
+
+## Implementation Status
+
+Status: local implementation complete; live Pi consult proof pending.
+
+Completed on 2026-06-29:
+
+- Added pure consult envelope and permission checks.
+- Registered `persona_consult` as a Pi tool over the existing `pi-subagents` slash bridge.
+- Added direct-launch prompt guidance for agents with configured consult peers.
+- Added `typebox` dependency to match the installed Pi extension runtime pattern.
+- Corrected the manual verification setup to include one `phase5-generalist`.
+
+Local verification:
+
+```bash
+rtk npm test
+rtk npm audit --omit=dev --legacy-peer-deps
+rtk git diff --check HEAD
+```
+
+Results:
+
+- `rtk npm test`: 30/30 passing.
+- `rtk npm audit --omit=dev --legacy-peer-deps`: 0 vulnerabilities.
+- `rtk git diff --check HEAD`: clean.
+
+Pi command smoke checks:
+
+- `/persona-list` executes through Pi Persona and emits `customType: "pi-persona"`.
+- `/persona doctor` executes through Pi Persona and currently reports the expected local fixture issue: one specialist exists and no generalist exists.
