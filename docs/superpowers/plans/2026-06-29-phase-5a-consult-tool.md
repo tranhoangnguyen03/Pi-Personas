@@ -442,9 +442,9 @@ rtk git commit -m "feat: register persona consult tool"
 Add this assertion to the existing `buildAgentLaunchRequest creates a fresh pi-subagents single-run request` test:
 
 ```js
-  assert.match(request.subagentParams.task, /Tool: persona_consult/);
-  assert.match(request.subagentParams.task, /requester: brand/);
-  assert.match(request.subagentParams.task, /Default consult context: fresh/);
+  assert.match(launch.subagentParams.task, /Tool: persona_consult/);
+  assert.match(launch.subagentParams.task, /requester: brand/);
+  assert.match(launch.subagentParams.task, /Default consult context: fresh/);
 ```
 
 Add this separate test:
@@ -531,8 +531,16 @@ In a fresh Pi session after reinstalling or reloading the local package:
 ```text
 /persona doctor
 /persona-list
+/persona new phase5-generalist
 /persona new phase5-requester
 /persona new phase5-consultant
+```
+
+Edit `.pi/agents/phase5-generalist.md`:
+
+```md
+role: generalist
+consults: all
 ```
 
 Edit `.pi/agents/phase5-requester.md`:
@@ -550,7 +558,8 @@ Leave `tools:` blank unless deliberately narrowing tools. Then start a new Pi se
 Pass criteria:
 
 - `/persona doctor` is handled by Pi Persona, not by the generic `subagent` doctor.
-- `/persona-list` is handled by Pi Persona and lists both phase5 agents.
+- `/persona doctor` passes once `phase5-generalist`, `phase5-requester`, and `phase5-consultant` are configured.
+- `/persona-list` is handled by Pi Persona and lists all three phase5 agents.
 - `/phase5-requester` launches through pi-subagents.
 - The requester calls `persona_consult`.
 - The consultant receives a summarized/fresh envelope by default.

@@ -1,4 +1,9 @@
 export { parseFrontmatterDocument, splitList, uniqueStrings } from "./frontmatter.js";
+export {
+  buildConsultEnvelope,
+  formatConsultProvenance,
+  resolveConsultLaunchRequest,
+} from "./consult.js";
 export { discoverPersonaProject } from "./agents.js";
 export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";

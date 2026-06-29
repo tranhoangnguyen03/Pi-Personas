@@ -6,14 +6,17 @@ import assert from "node:assert/strict";
 
 import {
   buildAgentLaunchRequest,
+  buildConsultEnvelope,
   discoverPersonaProject,
   createAgentScaffold,
+  formatConsultProvenance,
   formatPersonaList,
   formatDoctorReport,
   parseFrontmatterDocument,
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
+  resolveConsultLaunchRequest,
   runSubagentBridgeRequest,
   runDoctor,
   sendPersonaOutput,
@@ -487,6 +490,83 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
   assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
+});
+
+test("resolveConsultLaunchRequest builds summarized fresh consultant scope by default", async () => {
+  const root = await createWorkspace();
+
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "brand",
+    consultant: "guideline",
+    question: "Does this launch copy follow the guideline?",
+    summary: "The requester is revising launch copy for a brand workstream.",
+    constraints: "Use only guideline docs.",
+    expectedOutput: "Return concise approval notes.",
+  });
+
+  assert.equal(consult.requester.name, "brand");
+  assert.equal(consult.consultant.name, "guideline");
+  assert.equal(consult.context, "fresh");
+  assert.deepEqual(consult.docs, ["docs/shared/", "docs/workstreams/guideline/"]);
+  assert.deepEqual(consult.tools, ["read"]);
+  assert.deepEqual(consult.consults, []);
+  assert.equal(consult.subagentParams.agent, "guideline");
+  assert.equal(consult.subagentParams.context, "fresh");
+  assert.match(consult.subagentParams.task, /consultant: guideline/);
+  assert.match(consult.subagentParams.task, /summary: The requester is revising launch copy/);
+  assert.doesNotMatch(consult.subagentParams.task, /Brand prompt/);
+});
+
+test("resolveConsultLaunchRequest rejects peers not allowed by requester consults", async () => {
+  const root = await createWorkspace();
+
+  await assert.rejects(
+    () => resolveConsultLaunchRequest(root, {
+      requester: "guideline",
+      consultant: "brand",
+      question: "Can I ask brand?",
+      summary: "Guideline wants an unlisted peer.",
+    }),
+    /guideline cannot consult brand/,
+  );
+});
+
+test("resolveConsultLaunchRequest honors deliberate fork context", async () => {
+  const root = await createWorkspace();
+
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "brand",
+    consultant: "guideline",
+    question: "Review with full thread context.",
+    summary: "The requester says the full thread contains necessary nuance.",
+    context: "fork",
+  });
+
+  assert.equal(consult.context, "fork");
+  assert.equal(consult.subagentParams.context, "fork");
+  assert.match(consult.subagentParams.task, /context: fork/);
+});
+
+test("buildConsultEnvelope requires requester-written summary", () => {
+  assert.throws(
+    () => buildConsultEnvelope({
+      requester: "brand",
+      consultant: "guideline",
+      question: "Can you review this?",
+    }),
+    /consult summary is required/,
+  );
+});
+
+test("formatConsultProvenance reports successful and failed consults compactly", () => {
+  const text = formatConsultProvenance([
+    { consultant: "guideline", status: "answered", summary: "Guideline approved with one caveat." },
+    { consultant: "pricing", status: "failed", summary: "doc path missing" },
+  ]);
+
+  assert.match(text, /Consulted:/);
+  assert.match(text, /- guideline \(answered\): Guideline approved with one caveat\./);
+  assert.match(text, /- pricing \(failed\): doc path missing/);
 });
 
 test("formatPersonaList shows read-only discovery details", async () => {
