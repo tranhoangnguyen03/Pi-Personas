@@ -4,10 +4,12 @@ import { Type } from "typebox";
 import {
   createAgentScaffold,
   discoverPersonaProject,
+  formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatDoctorReport,
   formatPersonaList,
   formatRoundtableRosterPreview,
+  parsePersonaNewArgs,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
@@ -132,20 +134,21 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       if (subcommand === "new") {
         const rawName = trimmed.slice("new".length).trim();
         if (!rawName) {
-          ctx.ui.notify("Usage: /persona new <name>", "error");
+          ctx.ui.notify(personaUsage(), "error");
           return;
         }
         try {
-          const result = await createAgentScaffold(ctx.cwd, rawName);
+          const parsed = parsePersonaNewArgs(rawName);
+          const result = await createAgentScaffold(ctx.cwd, parsed.rawName, parsed.options);
           registerPersonaCommand(result.agentName);
-          sendPersonaOutput(pi, ctx, `Created ${result.relativePath}`, "info");
+          sendPersonaOutput(pi, ctx, formatAgentScaffoldCreatedMessage(result), "info");
         } catch (error) {
           sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
         return;
       }
 
-      sendPersonaOutput(pi, ctx, "Usage: /persona doctor or /persona new <name>", "info");
+      sendPersonaOutput(pi, ctx, personaUsage(), "info");
     },
   });
 
@@ -226,6 +229,13 @@ function normalizeCommandText(value: string): string {
     }
   }
   return trimmed;
+}
+
+function personaUsage(): string {
+  return [
+    "Usage: /persona doctor",
+    "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--tools tool[,tool]] [--consults peer[,peer]] [--tags tag[,tag]]",
+  ].join("\n");
 }
 
 function createRoundtableProgress(pi: ExtensionAPI, ctx: any) {

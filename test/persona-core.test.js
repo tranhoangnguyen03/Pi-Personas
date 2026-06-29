@@ -9,11 +9,13 @@ import {
   buildConsultEnvelope,
   discoverPersonaProject,
   createAgentScaffold,
+  formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatConsultProvenance,
   formatPersonaList,
   formatDoctorReport,
   formatRoundtableRosterPreview,
+  parsePersonaNewArgs,
   parseFrontmatterDocument,
   normalizeAgentName,
   resolveAgentScope,
@@ -124,6 +126,8 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.doesNotMatch(source, /registerCommand\("agent"/);
   assert.match(source, /\/persona doctor/);
   assert.doesNotMatch(source, /\/agent doctor/);
+  assert.match(source, /parsePersonaNewArgs/);
+  assert.match(source, /formatAgentScaffoldCreatedMessage/);
 });
 
 test("extension registers the persona_consult tool", async () => {
@@ -940,6 +944,47 @@ test("runSubagentBridgeRequest accepts delayed bridge start and response", async
   assert.equal(response.result.content[0].text, "delayed");
 });
 
+test("parsePersonaNewArgs accepts setup metadata options", () => {
+  const parsed = parsePersonaNewArgs(
+    'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --tools read,subagent --consults guideline,pricing --tags market,research',
+  );
+
+  assert.equal(parsed.rawName, "Market Research");
+  assert.equal(parsed.options.role, "specialist");
+  assert.equal(parsed.options.description, "Market research specialist.");
+  assert.deepEqual(parsed.options.docs, ["docs/workstreams/market/"]);
+  assert.deepEqual(parsed.options.tools, ["read", "subagent"]);
+  assert.deepEqual(parsed.options.consults, ["guideline", "pricing"]);
+  assert.deepEqual(parsed.options.tags, ["market", "research"]);
+});
+
+test("parsePersonaNewArgs accepts equals options and rejects unsafe input", () => {
+  const parsed = parsePersonaNewArgs(
+    'Ops Lead --role=generalist --description="Routes operational requests." --docs=docs/shared/,docs/workstreams/ops/ --tools=read --consults=all --tags=ops',
+  );
+
+  assert.equal(parsed.rawName, "Ops Lead");
+  assert.equal(parsed.options.role, "generalist");
+  assert.equal(parsed.options.description, "Routes operational requests.");
+  assert.deepEqual(parsed.options.docs, ["docs/shared/", "docs/workstreams/ops/"]);
+  assert.deepEqual(parsed.options.tools, ["read"]);
+  assert.deepEqual(parsed.options.consults, ["all"]);
+  assert.deepEqual(parsed.options.tags, ["ops"]);
+
+  assert.throws(
+    () => parsePersonaNewArgs("Ops Lead --role runtime"),
+    /role must be generalist or specialist/,
+  );
+  assert.throws(
+    () => parsePersonaNewArgs("Ops Lead --unknown value"),
+    /unknown \/persona new option: --unknown/,
+  );
+  assert.throws(
+    () => parsePersonaNewArgs("--role specialist"),
+    /Usage: \/persona new <name>/,
+  );
+});
+
 test("createAgentScaffold writes a minimal user-facing agent file", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
 
@@ -963,6 +1008,56 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
 
   const project = await discoverPersonaProject(root);
   assert.deepEqual(project.agents.map((agent) => agent.name), ["market-researcher"]);
+});
+
+test("createAgentScaffold writes provided setup metadata without runtime fields", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
+  await writeText(path.join(root, "docs/workstreams/market/brief.md"), "Market doc\n");
+
+  const result = await createAgentScaffold(root, "Market Research", {
+    role: "specialist",
+    description: "Market research specialist.",
+    docs: ["docs/workstreams/market/"],
+    tools: ["read", "subagent"],
+    consults: ["guideline"],
+    tags: ["market", "research"],
+  });
+  const content = await readFile(result.filePath, "utf8");
+
+  assert.match(content, /role: specialist/);
+  assert.match(content, /description: Market research specialist\./);
+  assert.match(content, /tools: read, subagent/);
+  assert.match(content, /docs: docs\/workstreams\/market\//);
+  assert.match(content, /consults: guideline/);
+  assert.match(content, /tags: market, research/);
+  assert.doesNotMatch(content, /defaultReads/);
+  assert.doesNotMatch(content, /systemPromptMode/);
+  assert.doesNotMatch(content, /inheritSkills/);
+
+  const project = await discoverPersonaProject(root);
+  const agent = project.agents.find((candidate) => candidate.name === "market-research");
+  assert.equal(agent.description, "Market research specialist.");
+  assert.deepEqual(agent.docs, ["docs/workstreams/market/"]);
+  assert.deepEqual(agent.tools, ["read", "subagent"]);
+  assert.deepEqual(agent.consults, ["guideline"]);
+});
+
+test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
+
+  const result = await createAgentScaffold(root, "Market Research", {
+    docs: ["docs/workstreams/market/"],
+    tools: ["read"],
+  });
+
+  assert.equal(formatAgentScaffoldCreatedMessage(result), [
+    "Created .pi/agents/market-research.md",
+    "",
+    "Launch: /market-research",
+    "Docs: docs/workstreams/market/",
+    "Tools: read",
+    "Next: run /persona doctor",
+  ].join("\n"));
 });
 
 test("createAgentScaffold refuses to overwrite existing agents", async () => {
