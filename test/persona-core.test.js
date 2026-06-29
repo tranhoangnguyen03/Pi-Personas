@@ -575,7 +575,8 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
   assert.match(content, /^---\nname: market-researcher\n/m);
   assert.match(content, /role: specialist/);
   assert.match(content, /description: Market Researcher specialist\./);
-  assert.match(content, /tools: read/);
+  assert.match(content, /tools:\n/);
+  assert.doesNotMatch(content, /tools: read/);
   assert.match(content, /docs:\n/);
   assert.match(content, /consults:\n/);
   assert.match(content, /tags:\n/);

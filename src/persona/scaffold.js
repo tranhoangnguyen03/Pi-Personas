@@ -22,7 +22,7 @@ export function renderAgentScaffold(agentName, options = {}) {
 name: ${agentName}
 role: specialist
 description: ${title} specialist.
-tools: read
+tools:
 docs:
 consults:
 tags:
