@@ -501,6 +501,12 @@ history.
 An active agent can invoke another agent by name when permitted by `consults`.
 The consulted agent runs through `pi-subagents`.
 
+Implementation note: requester agents with non-empty `consults` must list the
+`subagent` tool in their `tools` frontmatter. pi-subagents uses that explicit
+tool declaration to enable child-safe nested fanout inside subagent sessions.
+pi-persona should surface this through `/persona doctor`; it should not hide the
+missing capability until consult runtime.
+
 Default context policy:
 
 - Consults use summarized/fresh child context by default.
@@ -704,6 +710,8 @@ reliably:
 - `name` values are unique.
 - Exactly one generalist exists.
 - `consults` references point to existing agents or valid `all`.
+- Agents with non-empty `consults` list `subagent` in `tools`, because
+  pi-subagents requires that declaration to enable child-safe nested fanout.
 - Declared doc paths exist.
 - Declared tool names are known to Pi if Pi exposes tool discovery.
 - Copied runtime support roles include provenance metadata.

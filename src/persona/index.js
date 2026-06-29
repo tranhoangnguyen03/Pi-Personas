@@ -2,6 +2,7 @@ export { parseFrontmatterDocument, splitList, uniqueStrings } from "./frontmatte
 export {
   buildConsultEnvelope,
   formatConsultProvenance,
+  formatConsultSubagentInstructions,
   resolveConsultLaunchRequest,
 } from "./consult.js";
 export { discoverPersonaProject } from "./agents.js";

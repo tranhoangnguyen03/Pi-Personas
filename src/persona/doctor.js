@@ -31,6 +31,7 @@ export async function runDoctor(root, options = {}) {
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
   collectConsultIssues(project, issues);
+  collectConsultRuntimeIssues(project, issues);
   collectToolIssues(project, issues);
 
   const status = issues.some((issue) => issue.severity === "error")
@@ -215,6 +216,18 @@ function collectConsultIssues(project, issues) {
         });
       }
     }
+  }
+}
+
+function collectConsultRuntimeIssues(project, issues) {
+  for (const agent of project.agents) {
+    if (agent.consults.length === 0) continue;
+    if (agent.tools.includes("subagent")) continue;
+    issues.push({
+      severity: "error",
+      file: agent.relativePath,
+      message: `${agent.relativePath}: consult-capable agents must list tool 'subagent' so pi-subagents enables child-safe nested fanout`,
+    });
   }
 }
 

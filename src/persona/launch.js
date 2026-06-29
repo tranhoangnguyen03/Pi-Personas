@@ -74,15 +74,19 @@ function buildLaunchTask(scope, userTask) {
 
   if (scope.consults.length > 0) {
     sections.push([
-      "## Consult Tool",
+      "## Consult Execution",
       "",
-      "Tool: persona_consult",
+      "Tool: subagent",
+      "Call the `subagent` tool with `agent` set to an allowed consultant and `task` containing a Pi Persona consult envelope.",
       `requester: ${scope.agent.name}`,
       `Allowed consultants: ${scope.consults.join(", ")}`,
       "Default consult context: fresh",
       "Use context: fork only when the request genuinely requires full conversation context.",
-      "You, the requesting agent, must write the consult summary.",
-      "After the consult, synthesize the answer and include the compact provenance returned by the tool when useful.",
+      "You, the requesting agent, must write the consult summary before calling the consultant.",
+      "Include these fields in the consultant task: requester, consultant, context, summary, question, constraints, expectedOutput.",
+      "After the subagent result returns, synthesize the answer and append compact provenance when useful:",
+      "Consulted:",
+      "- <consultant> (answered|failed): <one-line summary>",
     ].join("\n"));
   }
 

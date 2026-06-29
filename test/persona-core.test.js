@@ -9,6 +9,7 @@ import {
   buildConsultEnvelope,
   discoverPersonaProject,
   createAgentScaffold,
+  formatConsultSubagentInstructions,
   formatConsultProvenance,
   formatPersonaList,
   formatDoctorReport,
@@ -53,7 +54,7 @@ Generalist prompt.
 name: brand
 role: specialist
 description: Brand strategy specialist.
-tools: read
+tools: read, subagent
 docs: docs/workstreams/brand/
 consults: guideline
 tags: brand, voice
@@ -125,11 +126,16 @@ test("extension uses the persona command namespace instead of generic agent", as
 
 test("extension registers the persona_consult tool", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const consultToolBlock = source.slice(
+    source.indexOf('name: "persona_consult"'),
+    source.indexOf("const registerPersonaCommand"),
+  );
 
   assert.match(source, /registerTool\(/);
   assert.match(source, /name:\s*"persona_consult"/);
   assert.match(source, /resolveConsultLaunchRequest/);
-  assert.match(source, /formatConsultProvenance/);
+  assert.match(source, /formatConsultSubagentInstructions/);
+  assert.doesNotMatch(consultToolBlock, /runSubagentBridgeRequest/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
@@ -229,7 +235,7 @@ test("doctor recognizes persona_consult as a Pi Persona runtime tool", async () 
 name: brand
 role: specialist
 description: Brand strategy specialist.
-tools: read, persona_consult
+tools: read, subagent, persona_consult
 docs: docs/workstreams/brand/
 consults: guideline
 tags: brand, voice
@@ -247,6 +253,32 @@ Brand prompt.
   assert.equal(result.issues.some((issue) => issue.message.includes("persona_consult")), false);
 });
 
+test("doctor requires subagent tool for agents with consult peers", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/brand.md"), `---
+name: brand
+role: specialist
+description: Brand strategy specialist.
+tools: read
+docs: docs/workstreams/brand/
+consults: guideline
+tags: brand, voice
+---
+Brand prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: consult-capable agents must list tool 'subagent'")));
+});
+
 test("resolver preview merges baseline and agent scope while deriving runtime fields", async () => {
   const root = await createWorkspace();
 
@@ -258,6 +290,7 @@ test("resolver preview merges baseline and agent scope while deriving runtime fi
   ]);
   assert.deepEqual(preview.tools, [
     "read",
+    "subagent",
   ]);
   assert.deepEqual(preview.consults, [
     "guideline",
@@ -511,7 +544,7 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
     "docs/shared/",
     "docs/workstreams/brand/",
   ]);
-  assert.deepEqual(launch.tools, ["read"]);
+  assert.deepEqual(launch.tools, ["read", "subagent"]);
   assert.deepEqual(launch.consults, ["guideline"]);
   assert.deepEqual(launch.subagentParams, {
     agent: "brand",
@@ -523,9 +556,11 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
   assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/, docs\/workstreams\/brand\/\]/);
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
-  assert.match(launch.subagentParams.task, /Tool: persona_consult/);
+  assert.match(launch.subagentParams.task, /Tool: subagent/);
+  assert.match(launch.subagentParams.task, /Call the `subagent` tool with `agent` set to an allowed consultant/);
   assert.match(launch.subagentParams.task, /requester: brand/);
   assert.match(launch.subagentParams.task, /Default consult context: fresh/);
+  assert.doesNotMatch(launch.subagentParams.task, /Tool: persona_consult/);
   assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
 });
 
@@ -535,7 +570,7 @@ test("buildAgentLaunchRequest omits consult tool guidance when no consult peers 
 
   const request = buildAgentLaunchRequest(scope, { task: "Answer directly." });
 
-  assert.doesNotMatch(request.subagentParams.task, /Tool: persona_consult/);
+  assert.doesNotMatch(request.subagentParams.task, /Tool: subagent/);
 });
 
 test("resolveConsultLaunchRequest builds summarized fresh consultant scope by default", async () => {
@@ -591,6 +626,25 @@ test("resolveConsultLaunchRequest honors deliberate fork context", async () => {
   assert.equal(consult.context, "fork");
   assert.equal(consult.subagentParams.context, "fork");
   assert.match(consult.subagentParams.task, /context: fork/);
+});
+
+test("formatConsultSubagentInstructions returns the exact child-safe subagent request", async () => {
+  const root = await createWorkspace();
+
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "brand",
+    consultant: "guideline",
+    question: "Review this with the guideline persona.",
+    summary: "The requester needs guideline review.",
+  });
+
+  const instructions = formatConsultSubagentInstructions(consult);
+
+  assert.match(instructions, /Call the `subagent` tool with this exact request/);
+  assert.match(instructions, /"agent": "guideline"/);
+  assert.match(instructions, /"context": "fresh"/);
+  assert.match(instructions, /After the `subagent` result returns/);
+  assert.match(instructions, /- guideline \(answered\): <one-line summary>/);
 });
 
 test("buildConsultEnvelope requires requester-written summary", () => {

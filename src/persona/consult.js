@@ -67,6 +67,29 @@ export function formatConsultProvenance(results) {
   return lines.join("\n");
 }
 
+export function formatConsultSubagentInstructions(consultRequest) {
+  const provenance = formatConsultProvenance([{
+    consultant: consultRequest.consultant.name,
+    status: "answered",
+    summary: "<one-line summary>",
+  }]);
+
+  return [
+    "Prepared Pi Persona consult request.",
+    "",
+    "Call the `subagent` tool with this exact request:",
+    "",
+    "```json",
+    JSON.stringify(consultRequest.subagentParams, null, 2),
+    "```",
+    "",
+    "After the `subagent` result returns, synthesize the answer for the user.",
+    "Append compact provenance using this shape, replacing the placeholder summary:",
+    "",
+    provenance,
+  ].join("\n");
+}
+
 function buildConsultTask(scope, envelope) {
   const { consult } = envelope;
   const sections = [];

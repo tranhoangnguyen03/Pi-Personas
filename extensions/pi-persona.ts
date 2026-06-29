@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import {
   createAgentScaffold,
   discoverPersonaProject,
-  formatConsultProvenance,
+  formatConsultSubagentInstructions,
   formatDoctorReport,
   formatPersonaList,
   resolveAgentLaunchRequest,
@@ -35,8 +35,8 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "persona_consult",
     label: "Persona Consult",
-    description: "Consult an allowed Pi Persona peer. The requester must be the active persona agent, the consultant must be listed in its consults field or allowed by consults: all, and summarized fresh context is the default.",
-    promptSnippet: "Use persona_consult only when your Pi Persona scope lists an allowed consult peer and the question genuinely needs that peer. Provide your own concise summary of relevant context.",
+    description: "Prepare and validate an allowed Pi Persona peer consult request. Execute the returned request with the child-safe pi-subagents subagent tool.",
+    promptSnippet: "Use persona_consult only when you need Pi Persona to validate and prepare a consult envelope. Then call the subagent tool with the returned request.",
     parameters: Type.Object({
       requester: Type.String({ description: "Active Pi Persona requester agent name" }),
       consultant: Type.String({ description: "Allowed Pi Persona consultant agent name" }),
@@ -52,21 +52,15 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
         const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
-        const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams);
-        const text = bridgeResponseText(response);
-        const provenance = formatConsultProvenance([{
-          consultant: consult.consultant.name,
-          status: response.isError ? "failed" : "answered",
-          summary: response.isError ? response.errorText || text : firstLine(text),
-        }]);
+        const text = formatConsultSubagentInstructions(consult);
         return {
-          content: [{ type: "text", text: `${text}\n\n${provenance}` }],
-          isError: response.isError,
+          content: [{ type: "text", text }],
+          isError: false,
           details: {
             requester: consult.requester.name,
             consultant: consult.consultant.name,
             context: consult.context,
-            provenance,
+            subagentParams: consult.subagentParams,
           },
         };
       } catch (error) {
@@ -179,8 +173,4 @@ function bridgeResponseText(response: any): string {
       .trim() || "(no output)";
   }
   return "(no output)";
-}
-
-function firstLine(text: string): string {
-  return text.split("\n").map((line) => line.trim()).find(Boolean) || "(no output)";
 }

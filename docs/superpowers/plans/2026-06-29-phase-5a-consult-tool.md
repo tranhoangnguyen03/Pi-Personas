@@ -4,9 +4,9 @@
 
 **Goal:** Add the first usable one-hop Pi Persona consult mechanism.
 
-**Architecture:** Keep pi-persona as the semantic layer. A new pure consult module resolves requester and consultant scopes, enforces `consults`, builds the structured consult envelope, and formats provenance. The Pi extension registers a `persona_consult` tool that calls the existing pi-subagents slash bridge, so child execution remains owned by pi-subagents.
+**Architecture:** Keep pi-persona as the semantic layer. A new pure consult module resolves requester and consultant scopes, enforces `consults`, builds the structured consult envelope, and formats provenance. Runtime execution uses pi-subagents' child-safe `subagent` fanout tool; `persona_consult` prepares and validates a consult payload instead of calling the parent slash bridge.
 
-**Tech Stack:** Node ESM, `node:test`, TypeScript Pi extension, `typebox`, pi-subagents slash bridge, Pi `registerTool`.
+**Tech Stack:** Node ESM, `node:test`, TypeScript Pi extension, `typebox`, pi-subagents slash bridge for direct launch, pi-subagents child fanout for consults, Pi `registerTool`.
 
 ---
 
@@ -31,8 +31,9 @@ This plan does not implement:
 ## Runtime Findings To Preserve
 
 - Pi packages expose tools with `pi.registerTool`; `pi-intercom` and other installed packages use this API.
-- pi-subagents exposes a slash bridge over `subagent:slash:request` and accepts `{ agent, task, context, agentScope, clarify }`.
-- pi-subagents agent tool availability follows the agent's `tools` frontmatter. New pi-persona scaffolds now leave `tools:` empty so Pi's normal toolset is not narrowed by default. Existing agents with `tools: read` should be edited to blank `tools:` or explicitly include `persona_consult` before Phase 5A live testing.
+- pi-subagents exposes a slash bridge over `subagent:slash:request` for parent-session direct launches and accepts `{ agent, task, context, agentScope, clarify }`.
+- pi-subagents disables that parent slash bridge inside child sessions. Nested consult execution must use the child-safe `subagent` fanout tool.
+- pi-subagents enables child-safe fanout only when the requester agent's `tools` frontmatter includes `subagent`; `/persona doctor` now treats a consult-capable agent without `subagent` as an error.
 
 ## Files
 
@@ -540,16 +541,19 @@ Edit `.pi/agents/phase5-generalist.md`:
 
 ```md
 role: generalist
+tools: subagent
 consults: all
 ```
 
 Edit `.pi/agents/phase5-requester.md`:
 
 ```md
+tools: subagent
 consults: phase5-consultant
 ```
 
-Leave `tools:` blank unless deliberately narrowing tools. Then start a new Pi session and run:
+Leave `tools:` blank on `phase5-consultant` unless deliberately narrowing its
+tools. Then start a new Pi session and run:
 
 ```text
 /phase5-requester Ask phase5-consultant whether the phrase "PHASE5_CONSULT_CANARY_29JUN2026" should be preserved exactly. The requester must consult the peer and summarize the result.
@@ -561,7 +565,7 @@ Pass criteria:
 - `/persona doctor` passes once `phase5-generalist`, `phase5-requester`, and `phase5-consultant` are configured.
 - `/persona-list` is handled by Pi Persona and lists all three phase5 agents.
 - `/phase5-requester` launches through pi-subagents.
-- The requester calls `persona_consult`.
+- The requester calls the child-safe `subagent` tool for `phase5-consultant`.
 - The consultant receives a summarized/fresh envelope by default.
 - The response preserves `PHASE5_CONSULT_CANARY_29JUN2026`.
 - The final answer includes a compact `Consulted:` provenance line.
@@ -581,13 +585,14 @@ rtk git commit -m "docs: record phase 5a consult verification"
 
 ## Implementation Status
 
-Status: local implementation complete; live Pi consult proof pending.
+Status: local option-2 implementation complete; live Pi consult proof needs a fresh manual Pi session with a requester agent that lists `subagent` in `tools`.
 
 Completed on 2026-06-29:
 
 - Added pure consult envelope and permission checks.
-- Registered `persona_consult` as a Pi tool over the existing `pi-subagents` slash bridge.
-- Added direct-launch prompt guidance for agents with configured consult peers.
+- Registered `persona_consult` as a Pi tool that prepares and validates the consult payload for the child-safe `subagent` tool.
+- Added direct-launch prompt guidance for agents with configured consult peers to call `subagent` with a Pi Persona consult envelope.
+- Added doctor validation requiring `subagent` in `tools` for agents with configured consult peers.
 - Added `typebox` dependency to match the installed Pi extension runtime pattern.
 - Corrected the manual verification setup to include one `phase5-generalist`.
 
@@ -601,7 +606,7 @@ rtk git diff --check HEAD
 
 Results:
 
-- `rtk npm test`: 30/30 passing.
+- `rtk npm test`: 32/32 passing.
 - `rtk npm audit --omit=dev --legacy-peer-deps`: 0 vulnerabilities.
 - `rtk git diff --check HEAD`: clean.
 
