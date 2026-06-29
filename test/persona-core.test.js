@@ -20,6 +20,7 @@ import {
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
+  resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
   runSubagentBridgeRequest,
@@ -589,6 +590,27 @@ test("buildAgentLaunchRequest omits consult tool guidance when no consult peers 
   assert.doesNotMatch(request.subagentParams.task, /Tool: subagent/);
 });
 
+test("resolveAgentLaunchRequest refuses duplicate agent names instead of choosing one", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/duplicate-brand.md"), `---
+name: brand
+role: specialist
+description: Duplicate brand strategy specialist.
+tools: read
+docs: docs/workstreams/brand/
+consults:
+tags: brand
+---
+Duplicate brand prompt.
+`);
+
+  await assert.rejects(
+    () => resolveAgentLaunchRequest(root, "brand", { task: "Launch the brand persona." }),
+    /ambiguous agent name 'brand'/,
+  );
+});
+
 test("resolveConsultLaunchRequest builds summarized fresh consultant scope by default", async () => {
   const root = await createWorkspace();
 
@@ -625,6 +647,32 @@ test("resolveConsultLaunchRequest rejects peers not allowed by requester consult
       summary: "Guideline wants an unlisted peer.",
     }),
     /guideline cannot consult brand/,
+  );
+});
+
+test("resolveConsultLaunchRequest refuses duplicate requester or consultant names", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/duplicate-guideline.md"), `---
+name: guideline
+role: specialist
+description: Duplicate guideline reviewer.
+tools: read
+docs: docs/workstreams/guideline/
+consults:
+tags: guideline
+---
+Duplicate guideline prompt.
+`);
+
+  await assert.rejects(
+    () => resolveConsultLaunchRequest(root, {
+      requester: "brand",
+      consultant: "guideline",
+      question: "Which guideline answer should I trust?",
+      summary: "The requester is checking duplicate consultant handling.",
+    }),
+    /ambiguous consultant name 'guideline'/,
   );
 });
 
@@ -746,6 +794,29 @@ Pricing prompt.
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /\{previous\}/);
   assert.match(roundtable.subagentParams.chain[2].task, /Moderator Synthesis/);
   assert.match(roundtable.subagentParams.chain[2].task, /\{previous\}/);
+});
+
+test("resolveRoundtableLaunchRequest refuses duplicate agent names before building a chain", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/duplicate-brand.md"), `---
+name: brand
+role: specialist
+description: Duplicate brand strategy specialist.
+tools: read
+docs: docs/workstreams/brand/
+consults:
+tags: brand
+---
+Duplicate brand prompt.
+`);
+
+  await assert.rejects(
+    () => resolveRoundtableLaunchRequest(root, {
+      query: "Brand guideline question.",
+    }),
+    /ambiguous agent name 'brand'/,
+  );
 });
 
 test("resolveRoundtableLaunchRequest caps the roster at five specialists", async () => {
@@ -1075,4 +1146,114 @@ test("normalizeAgentName creates stable pi-subagents compatible names", () => {
   assert.equal(normalizeAgentName("Market Researcher"), "market-researcher");
   assert.equal(normalizeAgentName("  Launch__Reviewer!! "), "launch-reviewer");
   assert.throws(() => normalizeAgentName("!!!"), /agent name must contain at least one letter or number/);
+});
+
+test("phase 7 full workflow composes setup docs doctor launch consult roundtable and add-agent", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-phase7-"));
+
+  await writeText(path.join(root, ".pi/agents/_baseline.md"), `---
+docs: docs/shared/
+tools: read
+---
+Shared pilot context.
+`);
+  await writeText(path.join(root, "docs/shared/company.md"), "Shared pilot doc\n");
+  await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand pilot doc\n");
+  await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline pilot doc\n");
+  await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing pilot doc\n");
+
+  await createAgentScaffold(root, "generalist", {
+    role: "generalist",
+    description: "Routes pilot requests.",
+    docs: ["docs/shared/"],
+    tools: ["read", "subagent"],
+    consults: ["all"],
+    tags: ["general", "routing"],
+  });
+  await createAgentScaffold(root, "brand", {
+    description: "Brand pilot specialist.",
+    docs: ["docs/workstreams/brand/"],
+    tools: ["read", "subagent"],
+    consults: ["guideline"],
+    tags: ["brand"],
+  });
+  await createAgentScaffold(root, "guideline", {
+    description: "Guideline pilot reviewer.",
+    docs: ["docs/workstreams/guideline/"],
+    tools: ["read"],
+    tags: ["guideline"],
+  });
+
+  const doctor = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+  assert.equal(doctor.status, "pass");
+
+  const initialProject = await discoverPersonaProject(root);
+  const list = formatPersonaList(initialProject);
+  assert.match(list, /generalist - generalist/);
+  assert.match(list, /brand - specialist/);
+  assert.match(list, /docs: docs\/workstreams\/brand\//);
+  assert.match(list, /consults: guideline/);
+  assert.doesNotMatch(list, /launch/i);
+
+  const directLaunch = await resolveAgentLaunchRequest(root, "brand", {
+    task: "Draft a pilot brand answer.",
+  });
+  assert.equal(directLaunch.subagentParams.agent, "brand");
+  assert.equal(directLaunch.subagentParams.context, "fresh");
+  assert.match(directLaunch.subagentParams.task, /Tool: subagent/);
+
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "brand",
+    consultant: "guideline",
+    question: "Does the pilot answer follow the guideline?",
+    summary: "The brand specialist is checking pilot copy.",
+  });
+  assert.equal(consult.subagentParams.agent, "guideline");
+  assert.equal(consult.subagentParams.context, "fresh");
+  assert.match(consult.subagentParams.task, /summary: The brand specialist is checking pilot copy\./);
+
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline pilot question.",
+  });
+  assert.equal(roundtable.generalist.name, "generalist");
+  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline"]);
+  assert.equal(roundtable.subagentParams.chain.length, 3);
+
+  await createAgentScaffold(root, "pricing", {
+    description: "Pricing pilot specialist.",
+    docs: ["docs/workstreams/pricing/"],
+    tools: ["read"],
+    tags: ["pricing"],
+  });
+
+  const expandedProject = await discoverPersonaProject(root);
+  assert.ok(expandedProject.agents.some((agent) => agent.name === "pricing"));
+  assert.equal((await resolveAgentLaunchRequest(root, "brand", { task: "Still works." })).agentName, "brand");
+  assert.equal((await resolveAgentLaunchRequest(root, "pricing", { task: "Pricing works." })).agentName, "pricing");
+
+  await createAgentScaffold(root, "backup-generalist", {
+    role: "generalist",
+    description: "Second pilot generalist.",
+    docs: ["docs/shared/"],
+    tools: ["read"],
+    tags: ["general"],
+  });
+
+  const duplicateDoctor = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+  assert.equal(duplicateDoctor.status, "error");
+  assert.ok(duplicateDoctor.issues.some((issue) => issue.message.includes("multiple generalist agents")));
+  await assert.rejects(
+    () => resolveRoundtableLaunchRequest(root, { query: "Ambiguous moderator question." }),
+    /roundtable requires exactly one generalist; found 2/,
+  );
 });

@@ -50,6 +50,30 @@ export async function discoverPersonaProject(root) {
   };
 }
 
+export function findUniqueAgent(project, agentName, label = "agent") {
+  const matches = project.agents.filter((candidate) => candidate.name === agentName);
+  if (matches.length === 0) throw new Error(`Unknown ${label}: ${agentName}`);
+  if (matches.length > 1) {
+    throw new Error(`ambiguous ${label} name '${agentName}' in ${formatAgentPaths(matches)}`);
+  }
+  return matches[0];
+}
+
+export function assertUniqueAgentNames(project) {
+  const byName = new Map();
+  for (const agent of project.agents) {
+    const entries = byName.get(agent.name) ?? [];
+    entries.push(agent);
+    byName.set(agent.name, entries);
+  }
+
+  for (const [name, agents] of byName.entries()) {
+    if (agents.length > 1) {
+      throw new Error(`ambiguous agent name '${name}' in ${formatAgentPaths(agents)}`);
+    }
+  }
+}
+
 function toAgent(file) {
   return {
     filePath: file.filePath,
@@ -66,6 +90,10 @@ function toAgent(file) {
     frontmatter: file.frontmatter,
     body: file.body,
   };
+}
+
+function formatAgentPaths(agents) {
+  return agents.map((agent) => agent.relativePath).join(", ");
 }
 
 async function listMarkdownFiles(dir) {

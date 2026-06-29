@@ -1,4 +1,4 @@
-import { discoverPersonaProject } from "./agents.js";
+import { assertUniqueAgentNames, discoverPersonaProject } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentStep } from "./runtime.js";
 
@@ -8,6 +8,7 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
   const query = requireText(input.query, "roundtable query");
   const context = input.context === "fork" ? "fork" : "fresh";
   const project = await discoverPersonaProject(root);
+  assertUniqueAgentNames(project);
   const generalist = findGeneralist(project);
   const roster = selectRoundtableRoster(project, query);
   if (roster.length === 0) {

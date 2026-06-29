@@ -1,10 +1,9 @@
-import { discoverPersonaProject } from "./agents.js";
+import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { uniqueStrings } from "./frontmatter.js";
 
 export async function resolveAgentScope(root, agentName) {
   const project = await discoverPersonaProject(root);
-  const agent = project.agents.find((candidate) => candidate.name === agentName);
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
+  const agent = findUniqueAgent(project, agentName);
 
   const baselineFrontmatter = project.baseline?.frontmatter ?? {};
   const baselineBody = project.baseline?.body?.trim() ?? "";

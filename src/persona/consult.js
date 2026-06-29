@@ -1,4 +1,4 @@
-import { discoverPersonaProject } from "./agents.js";
+import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentParams } from "./runtime.js";
 
@@ -118,9 +118,7 @@ function assertCanConsult(requester, consultant) {
 
 function findAgent(project, name, label) {
   const agentName = requireText(name, label);
-  const agent = project.agents.find((candidate) => candidate.name === agentName);
-  if (!agent) throw new Error(`Unknown ${label}: ${agentName}`);
-  return agent;
+  return findUniqueAgent(project, agentName, label);
 }
 
 function requireText(value, field) {
