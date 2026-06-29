@@ -103,6 +103,13 @@ function createEventBus(onRequest) {
   };
 }
 
+test("package manifest exposes Pi Persona as a Pi extension package", async () => {
+  const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+
+  assert.ok(manifest.keywords.includes("pi-package"));
+  assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-persona.ts"]);
+});
+
 test("discovers launchable project agents and keeps baseline as control file", async () => {
   const root = await createWorkspace();
 

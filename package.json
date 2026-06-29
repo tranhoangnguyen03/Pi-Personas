@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "personas",
+    "agents"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-persona.ts"
+    ]
+  },
   "scripts": {
     "check": "node --check src/persona/agents.js && node --check src/persona/doctor.js && node --check src/persona/frontmatter.js && node --check src/persona/index.js && node --check src/persona/launch.js && node --check src/persona/resolver.js && node --check src/persona/scaffold.js && node --check src/persona/schema.js && node --check src/persona/subagent-bridge.js && node --experimental-strip-types --check extensions/pi-persona.ts",
     "test": "npm run check && node --test"
