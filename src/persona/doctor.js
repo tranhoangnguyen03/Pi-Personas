@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { discoverPersonaProject, pathExists } from "./agents.js";
+import { discoverPersonaProject, pathExists, resolveWorkspacePath } from "./agents.js";
 import { validatePersonaSchema } from "./schema.js";
 
 const KNOWN_TOOLS = new Set([
@@ -155,7 +155,12 @@ function collectDuplicateNameIssues(project, issues) {
 
 function collectGeneralistIssues(project, issues) {
   const generalists = project.agents.filter((agent) => agent.role === "generalist");
-  if (generalists.length > 1) {
+  if (generalists.length === 0) {
+    issues.push({
+      severity: "error",
+      message: "exactly one generalist required; found 0",
+    });
+  } else if (generalists.length > 1) {
     issues.push({
       severity: "error",
       message: `multiple generalist agents: ${generalists.map((agent) => agent.name).join(", ")}`,
@@ -177,6 +182,15 @@ async function collectDocsIssues(project, issues) {
   }
 
   for (const entry of docsEntries) {
+    const resolved = resolveWorkspacePath(project.root, entry.docPath);
+    if (!resolved.ok) {
+      issues.push({
+        severity: "error",
+        file: entry.owner,
+        message: `${entry.owner}: docs path must stay inside workspace: ${entry.docPath}`,
+      });
+      continue;
+    }
     if (!await pathExists(project.root, entry.docPath)) {
       issues.push({
         severity: "error",

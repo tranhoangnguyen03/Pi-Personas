@@ -1,4 +1,4 @@
-const ALLOWED_ROLES = new Set(["generalist", "specialist"]);
+const ALLOWED_ROLES = new Set(["generalist", "specialist", "runtime"]);
 
 const RUNTIME_ONLY_FIELDS = [
   "defaultReads",

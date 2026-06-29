@@ -85,11 +85,43 @@ async function listMarkdownFiles(dir) {
 }
 
 export async function pathExists(root, relativePath) {
+  const resolved = resolveWorkspacePath(root, relativePath);
+  if (!resolved.ok) return false;
   try {
-    await stat(path.resolve(root, relativePath));
+    await stat(resolved.path);
     return true;
   } catch (error) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
+}
+
+export function resolveWorkspacePath(root, relativePath) {
+  if (typeof relativePath !== "string" || relativePath.trim() === "") {
+    return {
+      ok: false,
+      reason: "empty",
+    };
+  }
+  if (path.isAbsolute(relativePath)) {
+    return {
+      ok: false,
+      reason: "absolute",
+    };
+  }
+
+  const workspaceRoot = path.resolve(root);
+  const resolvedPath = path.resolve(workspaceRoot, relativePath);
+  const relativeFromRoot = path.relative(workspaceRoot, resolvedPath);
+  if (relativeFromRoot.startsWith("..") || path.isAbsolute(relativeFromRoot)) {
+    return {
+      ok: false,
+      reason: "escape",
+    };
+  }
+
+  return {
+    ok: true,
+    path: resolvedPath,
+  };
 }

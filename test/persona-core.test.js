@@ -10,6 +10,7 @@ import {
   createAgentScaffold,
   formatPersonaList,
   formatDoctorReport,
+  parseFrontmatterDocument,
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
@@ -271,6 +272,109 @@ Runtime leak prompt.
   assert.ok(messages.some((message) => message.includes("runtime-only field 'inheritSkills'")));
 });
 
+test("doctor requires exactly one generalist", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-no-generalist-"));
+
+  await writeText(path.join(root, ".pi/agents/brand.md"), `---
+name: brand
+role: specialist
+description: Brand strategy specialist.
+tools: read
+docs: docs/brand/
+---
+Brand prompt.
+`);
+
+  await writeText(path.join(root, "docs/brand/brief.md"), "Brand doc\n");
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.ok(result.issues.some((issue) => issue.message.includes("exactly one generalist required")));
+});
+
+test("runtime role files are launchable but excluded from generalist requirements", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/runtime/worker.md"), `---
+name: worker
+package: runtime
+origin: pi-subagents builtin worker
+role: runtime
+description: Runtime worker.
+tools: read
+docs: docs/shared/
+---
+Worker prompt.
+`);
+
+  const project = await discoverPersonaProject(root);
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.ok(project.agents.some((agent) => agent.name === "worker" && agent.role === "runtime"));
+  assert.equal(result.status, "pass");
+  assert.ok(!result.issues.some((issue) => issue.message.includes("unknown role 'runtime'")));
+});
+
+test("doctor rejects docs paths that escape the workspace", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/escape.md"), `---
+name: escape
+role: specialist
+description: Escaping docs specialist.
+tools: read
+docs: ../../
+---
+Escape prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.ok(result.issues.some((issue) => issue.message.includes("docs path must stay inside workspace")));
+});
+
+test("frontmatter parser supports YAML arrays and quoted colon values", () => {
+  const parsed = parseFrontmatterDocument(`---
+name: yaml-agent
+description: "Handles values with: colons"
+tools:
+  - read
+  - write
+docs:
+  - docs/shared/
+  - docs/workstreams/brand/
+consults: [guideline, launch]
+tags:
+  - brand
+---
+Prompt body.
+`, ".pi/agents/yaml-agent.md");
+
+  assert.deepEqual(parsed.errors, []);
+  assert.equal(parsed.frontmatter.description, "Handles values with: colons");
+  assert.deepEqual(parsed.frontmatter.tools, ["read", "write"]);
+  assert.deepEqual(parsed.frontmatter.docs, ["docs/shared/", "docs/workstreams/brand/"]);
+  assert.deepEqual(parsed.frontmatter.consults, ["guideline", "launch"]);
+  assert.deepEqual(parsed.frontmatter.tags, ["brand"]);
+});
+
 test("resolveAgentScope merges baseline and selected agent only", async () => {
   const root = await createWorkspace();
 
@@ -398,7 +502,7 @@ test("runSubagentBridgeRequest rejects when the pi-subagents bridge is absent", 
       { events: bus },
       { cwd: "/tmp/example" },
       { agent: "brand", task: "Task", context: "fresh" },
-      { requestId: "missing-bridge" },
+      { requestId: "missing-bridge", startTimeoutMs: 1 },
     ),
     /pi-subagents slash bridge did not respond/,
   );
@@ -427,6 +531,30 @@ test("runSubagentBridgeRequest ignores responses for other request ids", async (
   );
 
   assert.equal(response.result.content[0].text, "right");
+});
+
+test("runSubagentBridgeRequest accepts delayed bridge start and response", async () => {
+  const bus = createEventBus((request, events) => {
+    queueMicrotask(() => {
+      events.emit("subagent:slash:started", { requestId: request.requestId });
+      queueMicrotask(() => {
+        events.emit("subagent:slash:response", {
+          requestId: request.requestId,
+          result: { content: [{ type: "text", text: "delayed" }], details: { mode: "single", results: [] } },
+          isError: false,
+        });
+      });
+    });
+  });
+
+  const response = await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    { requestId: "delayed-request", startTimeoutMs: 50 },
+  );
+
+  assert.equal(response.result.content[0].text, "delayed");
 });
 
 test("createAgentScaffold writes a minimal user-facing agent file", async () => {

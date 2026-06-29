@@ -10,13 +10,18 @@ export const SUBAGENT_SLASH_EVENTS = {
 
 export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
   const requestId = options.requestId ?? randomUUID();
+  const startTimeoutMs = Number.isFinite(options.startTimeoutMs) ? options.startTimeoutMs : 15_000;
   return new Promise((resolve, reject) => {
     let done = false;
-    let started = false;
+    const startTimeout = setTimeout(() => {
+      finish(() => reject(new Error(
+        "pi-subagents slash bridge did not respond. Ensure pi-subagents is installed and loaded in this Pi session.",
+      )));
+    }, startTimeoutMs);
 
     const unsubscribeStarted = pi.events.on(SUBAGENT_SLASH_EVENTS.started, (data) => {
       if (done || !matchesRequest(data, requestId)) return;
-      started = true;
+      clearTimeout(startTimeout);
     });
     const unsubscribeResponse = pi.events.on(SUBAGENT_SLASH_EVENTS.response, (data) => {
       if (done || !matchesRequest(data, requestId)) return;
@@ -26,18 +31,13 @@ export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
     const finish = (next) => {
       if (done) return;
       done = true;
+      clearTimeout(startTimeout);
       unsubscribeStarted?.();
       unsubscribeResponse?.();
       next();
     };
 
     pi.events.emit(SUBAGENT_SLASH_EVENTS.request, { requestId, params, ctx });
-
-    if (!started && !done) {
-      finish(() => reject(new Error(
-        "pi-subagents slash bridge did not respond. Ensure pi-subagents is installed and loaded in this Pi session.",
-      )));
-    }
   });
 }
 

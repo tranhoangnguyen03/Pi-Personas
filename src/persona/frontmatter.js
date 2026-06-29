@@ -1,3 +1,5 @@
+import { parseDocument } from "yaml";
+
 const FRONTMATTER_BOUNDARY = "---";
 
 const LIST_FIELDS = new Set(["tools", "docs", "consults", "tags"]);
@@ -22,33 +24,42 @@ export function parseFrontmatterDocument(source, filePath = "<memory>") {
     };
   }
 
-  const frontmatterLines = lines.slice(1, end);
+  const frontmatterSource = lines.slice(1, end).join("\n");
   const body = lines.slice(end + 1).join("\n");
-  const errors = [];
-  const raw = {};
 
-  for (const line of frontmatterLines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const separator = trimmed.indexOf(":");
-    if (separator === -1) {
-      errors.push(`${filePath}: malformed frontmatter line '${trimmed}'`);
-      continue;
+  try {
+    const document = parseDocument(frontmatterSource, {
+      prettyErrors: false,
+      uniqueKeys: true,
+    });
+    const errors = document.errors.map((error) => `${filePath}: ${error.message}`);
+    if (errors.length > 0) {
+      return {
+        frontmatter: {},
+        body,
+        errors,
+      };
     }
-    const key = trimmed.slice(0, separator).trim();
-    const value = trimmed.slice(separator + 1).trim();
-    if (!key) {
-      errors.push(`${filePath}: empty frontmatter key`);
-      continue;
+    const raw = document.toJS() ?? {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return {
+        frontmatter: {},
+        body,
+        errors: [`${filePath}: frontmatter must be a YAML mapping`],
+      };
     }
-    raw[key] = value;
+    return {
+      frontmatter: normalizeFrontmatter(raw),
+      body,
+      errors: [],
+    };
+  } catch (error) {
+    return {
+      frontmatter: {},
+      body,
+      errors: [`${filePath}: ${error instanceof Error ? error.message : String(error)}`],
+    };
   }
-
-  return {
-    frontmatter: normalizeFrontmatter(raw),
-    body,
-    errors,
-  };
 }
 
 function normalizeFrontmatter(raw) {
@@ -56,6 +67,8 @@ function normalizeFrontmatter(raw) {
   for (const [key, value] of Object.entries(raw)) {
     if (LIST_FIELDS.has(key)) {
       normalized[key] = splitList(value);
+    } else if (value === null || value === undefined) {
+      normalized[key] = "";
     } else {
       normalized[key] = value;
     }
