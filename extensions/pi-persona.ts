@@ -1,11 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import {
   createAgentScaffold,
   discoverPersonaProject,
+  formatConsultProvenance,
   formatDoctorReport,
   formatPersonaList,
   resolveAgentLaunchRequest,
+  resolveConsultLaunchRequest,
   runDoctor,
   sendPersonaOutput,
   runSubagentBridgeRequest,
@@ -29,6 +32,53 @@ const RESERVED_COMMANDS = new Set([
 ]);
 
 export default function registerPiPersona(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "persona_consult",
+    label: "Persona Consult",
+    description: "Consult an allowed Pi Persona peer. The requester must be the active persona agent, the consultant must be listed in its consults field or allowed by consults: all, and summarized fresh context is the default.",
+    promptSnippet: "Use persona_consult only when your Pi Persona scope lists an allowed consult peer and the question genuinely needs that peer. Provide your own concise summary of relevant context.",
+    parameters: Type.Object({
+      requester: Type.String({ description: "Active Pi Persona requester agent name" }),
+      consultant: Type.String({ description: "Allowed Pi Persona consultant agent name" }),
+      question: Type.String({ description: "Specific question for the consultant" }),
+      summary: Type.String({ description: "Requester-authored concise context summary" }),
+      constraints: Type.Optional(Type.String({ description: "Constraints the consultant must follow" })),
+      expectedOutput: Type.Optional(Type.String({ description: "Requested answer shape" })),
+      context: Type.Optional(Type.String({
+        enum: ["fresh", "fork"],
+        description: "fresh by default; fork only when full conversation context is deliberately required",
+      })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      try {
+        const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
+        const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams);
+        const text = bridgeResponseText(response);
+        const provenance = formatConsultProvenance([{
+          consultant: consult.consultant.name,
+          status: response.isError ? "failed" : "answered",
+          summary: response.isError ? response.errorText || text : firstLine(text),
+        }]);
+        return {
+          content: [{ type: "text", text: `${text}\n\n${provenance}` }],
+          isError: response.isError,
+          details: {
+            requester: consult.requester.name,
+            consultant: consult.consultant.name,
+            context: consult.context,
+            provenance,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+          details: { error: true },
+        };
+      }
+    },
+  });
+
   const registerPersonaCommand = (agentName: string) => {
     if (!isSafeCommandName(agentName)) return;
     if (RESERVED_COMMANDS.has(agentName)) return;
@@ -129,4 +179,8 @@ function bridgeResponseText(response: any): string {
       .trim() || "(no output)";
   }
   return "(no output)";
+}
+
+function firstLine(text: string): string {
+  return text.split("\n").map((line) => line.trim()).find(Boolean) || "(no output)";
 }

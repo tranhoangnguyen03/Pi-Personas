@@ -13,6 +13,7 @@ const KNOWN_TOOLS = new Set([
   "grep",
   "find",
   "ls",
+  "persona_consult",
   "subagent",
   "intercom",
   "contact_supervisor",

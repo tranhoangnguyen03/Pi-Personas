@@ -123,6 +123,15 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.doesNotMatch(source, /\/agent doctor/);
 });
 
+test("extension registers the persona_consult tool", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+
+  assert.match(source, /registerTool\(/);
+  assert.match(source, /name:\s*"persona_consult"/);
+  assert.match(source, /resolveConsultLaunchRequest/);
+  assert.match(source, /formatConsultProvenance/);
+});
+
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
   const messages = [];
   const notifications = [];
@@ -211,6 +220,31 @@ Bad control prompt.
   assert.ok(messages.some((message) => message.includes("consults unknown agent 'missing-peer'")));
   assert.ok(messages.some((message) => message.includes("unknown tool 'fake_tool'")));
   assert.ok(messages.some((message) => message.includes("control file is launchable")));
+});
+
+test("doctor recognizes persona_consult as a Pi Persona runtime tool", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/brand.md"), `---
+name: brand
+role: specialist
+description: Brand strategy specialist.
+tools: read, persona_consult
+docs: docs/workstreams/brand/
+consults: guideline
+tags: brand, voice
+---
+Brand prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.issues.some((issue) => issue.message.includes("persona_consult")), false);
 });
 
 test("resolver preview merges baseline and agent scope while deriving runtime fields", async () => {
