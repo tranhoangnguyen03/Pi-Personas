@@ -523,7 +523,19 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
   assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/, docs\/workstreams\/brand\/\]/);
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
+  assert.match(launch.subagentParams.task, /Tool: persona_consult/);
+  assert.match(launch.subagentParams.task, /requester: brand/);
+  assert.match(launch.subagentParams.task, /Default consult context: fresh/);
   assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
+});
+
+test("buildAgentLaunchRequest omits consult tool guidance when no consult peers exist", async () => {
+  const root = await createWorkspace();
+  const scope = await resolveAgentScope(root, "guideline");
+
+  const request = buildAgentLaunchRequest(scope, { task: "Answer directly." });
+
+  assert.doesNotMatch(request.subagentParams.task, /Tool: persona_consult/);
 });
 
 test("resolveConsultLaunchRequest builds summarized fresh consultant scope by default", async () => {

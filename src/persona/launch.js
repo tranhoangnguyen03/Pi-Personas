@@ -72,6 +72,20 @@ function buildLaunchTask(scope, userTask) {
     `Tags: ${scope.tags.length ? scope.tags.join(", ") : "none"}`,
   ].join("\n"));
 
+  if (scope.consults.length > 0) {
+    sections.push([
+      "## Consult Tool",
+      "",
+      "Tool: persona_consult",
+      `requester: ${scope.agent.name}`,
+      `Allowed consultants: ${scope.consults.join(", ")}`,
+      "Default consult context: fresh",
+      "Use context: fork only when the request genuinely requires full conversation context.",
+      "You, the requesting agent, must write the consult summary.",
+      "After the consult, synthesize the answer and include the compact provenance returned by the tool when useful.",
+    ].join("\n"));
+  }
+
   const baseline = scope.promptSections.find((section) => section.label === "Baseline")?.body;
   if (baseline) {
     sections.push(["## Baseline Context", "", baseline].join("\n"));
