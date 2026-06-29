@@ -141,7 +141,7 @@ test("sendPersonaOutput writes visible command output when Pi sendMessage is ava
     "info",
   );
 
-  assert.deepEqual(messages, [{ content: "Doctor report", display: true }]);
+  assert.deepEqual(messages, [{ customType: "pi-persona", content: "Doctor report", display: true }]);
   assert.deepEqual(notifications, []);
 });
 

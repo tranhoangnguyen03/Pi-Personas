@@ -196,3 +196,30 @@ Run: `git commit -m "feat: add persona direct launch adapter"`
 - Spec coverage: This plan covers Phase 4A adapter behavior and leaves full Pi runtime proof as manual verification.
 - Placeholder scan: No placeholder markers remain.
 - Type consistency: `buildAgentLaunchRequest`, `resolveAgentLaunchRequest`, `formatPersonaList`, and `runSubagentBridgeRequest` are the stable names used across tests and implementation.
+
+## Runtime Verification
+
+Status: pass, with one follow-up polish fix applied.
+
+Manual Pi session verification on 2026-06-29 showed:
+
+- `/persona doctor` executed from the Pi Persona extension and reported installed dependencies:
+  - `pi-subagents: 0.31.0`
+  - `pi-intercom: 0.6.0`
+- `/persona-list` executed and initially returned `- none`.
+- `/persona new phase4-proof` created `.pi/agents/phase4-proof.md`.
+- `/persona-list` then discovered `phase4-proof - specialist`.
+- Direct slash launch of `/phase4-proof` reached `pi-subagents` and completed run `9d5f8645`.
+- The child returned exact marker `PHASE4_DIRECT_LAUNCH_AFTER_INSTALL_OK`.
+
+The remaining doctor error after that proof is expected until the project has
+exactly one `role: generalist` agent:
+
+```text
+ERROR: exactly one generalist required; found 0
+```
+
+The session also exposed a command-output polish bug: Persona command messages
+rendered as `[undefined]` because they were sent without a Pi `customType`.
+That was fixed by tagging Persona visible messages with `customType:
+"pi-persona"`.
