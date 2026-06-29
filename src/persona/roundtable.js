@@ -51,7 +51,10 @@ export function selectRoundtableRoster(project, query, options = {}) {
     }))
     .sort((a, b) => b.score - a.score || a.agent.name.localeCompare(b.agent.name));
 
-  return scored.slice(0, max).map((entry) => entry.agent);
+  const eligible = scored.some((entry) => entry.score > 0)
+    ? scored.filter((entry) => entry.score > 0)
+    : scored;
+  return eligible.slice(0, max).map((entry) => entry.agent);
 }
 
 export function formatRoundtableRosterPreview(roundtable) {

@@ -759,6 +759,28 @@ ${name} prompt.
   assert.ok(!roundtable.roster.some((agent) => agent.role === "generalist"));
 });
 
+test("resolveRoundtableLaunchRequest excludes unrelated zero-score specialists when matches exist", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/unrelated.md"), `---
+name: unrelated
+role: specialist
+description: Unrelated proof specialist.
+tools: read
+docs:
+consults:
+tags: unrelated
+---
+Unrelated prompt.
+`);
+
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+  });
+
+  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline"]);
+});
+
 test("formatRoundtableRosterPreview shows selected specialists and command context", async () => {
   const root = await createWorkspace();
   const roundtable = await resolveRoundtableLaunchRequest(root, {
