@@ -10,6 +10,11 @@ export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
 export { sendPersonaOutput } from "./pi-output.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
+export {
+  formatRoundtableRosterPreview,
+  resolveRoundtableLaunchRequest,
+  selectRoundtableRoster,
+} from "./roundtable.js";
 export { createAgentScaffold, normalizeAgentName, renderAgentScaffold } from "./scaffold.js";
 export { validatePersonaSchema } from "./schema.js";
 export { runSubagentBridgeRequest, SUBAGENT_SLASH_EVENTS } from "./subagent-bridge.js";

@@ -477,7 +477,7 @@ assembled from their own files. The requester may deliberately choose forked
 context in the consult envelope when the consultant needs the full conversation
 history.
 
-### Tier 3 - Round-table: `/roundtable <query>`
+### Tier 3 - Round-table: `/persona-roundtable <query>`
 
 The generalist selects up to five relevant specialists and convenes them into a
 short Delphi-style process.
@@ -587,7 +587,7 @@ structural rule, not a broad policy system.
 
 ## 11. Round-table Protocol
 
-When the user invokes `/roundtable <query>`:
+When the user invokes `/persona-roundtable <query>`:
 
 ### Step 0 - Convene
 
@@ -595,9 +595,11 @@ The generalist selects up to five specialists using simple relevance over
 `tags`, `description`, and declared `docs`. The roster is shown to the user
 before round 1 begins.
 
-The roster preview is editable, not a heavy gate. The user may say something
-like "drop docs-librarian, add secretary." If the user does not correct the
-roster, the round-table proceeds.
+The roster preview is visible before execution. Phase 6A keeps override manual
+and minimal: the user can relaunch with a clearer query if the roster is wrong.
+Later, if Pi exposes a clean non-blocking confirmation surface, the user may say
+something like "drop docs-librarian, add secretary." If the user does not correct
+the roster, the round-table proceeds.
 
 This selection should be understandable, not over-engineered. Advanced routing
 quality work belongs later, after users report concrete misses.
@@ -956,7 +958,7 @@ Have a consulted agent encounter a blocking decision. Pass: it uses
 ### Phase 6 - Round-table
 
 **Test 6.1 - Convene roster.**
-Invoke `/roundtable` with a cross-functional question. Pass: the generalist
+Invoke `/persona-roundtable` with a cross-functional question. Pass: the generalist
 selects up to five plausible specialists and shows the roster.
 
 **Test 6.2 - Roster override.**

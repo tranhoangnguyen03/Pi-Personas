@@ -13,11 +13,13 @@ import {
   formatConsultProvenance,
   formatPersonaList,
   formatDoctorReport,
+  formatRoundtableRosterPreview,
   parseFrontmatterDocument,
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
   resolveConsultLaunchRequest,
+  resolveRoundtableLaunchRequest,
   runSubagentBridgeRequest,
   runDoctor,
   sendPersonaOutput,
@@ -136,6 +138,13 @@ test("extension registers the persona_consult tool", async () => {
   assert.match(source, /resolveConsultLaunchRequest/);
   assert.match(source, /formatConsultSubagentInstructions/);
   assert.doesNotMatch(consultToolBlock, /runSubagentBridgeRequest/);
+});
+
+test("extension registers persona-roundtable as a namespaced command", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+
+  assert.match(source, /registerCommand\("persona-roundtable"/);
+  assert.doesNotMatch(source, /registerCommand\("roundtable"/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
@@ -684,6 +693,85 @@ test("formatPersonaList shows read-only discovery details", async () => {
   assert.match(output, /docs: docs\/workstreams\/brand\//);
   assert.match(output, /consults: guideline/);
   assert.doesNotMatch(output, /launch/i);
+});
+
+test("resolveRoundtableLaunchRequest builds a pi-subagents chain with two specialist rounds and synthesis", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/pricing.md"), `---
+name: pricing
+role: specialist
+description: Pricing strategy specialist.
+tools: read
+docs: docs/workstreams/pricing/
+consults:
+tags: pricing, revenue
+---
+Pricing prompt.
+`);
+  await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing doc\n");
+
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Should brand positioning change pricing and guideline language?",
+  });
+
+  assert.equal(roundtable.generalist.name, "generalist");
+  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline", "pricing"]);
+  assert.equal(roundtable.context, "fresh");
+  assert.deepEqual(roundtable.subagentParams.chain.map((step) => step.phase), [
+    "Round 1",
+    "Round 2",
+    "Synthesis",
+  ]);
+  assert.equal(roundtable.subagentParams.chain[0].parallel.length, 3);
+  assert.equal(roundtable.subagentParams.chain[1].parallel.length, 3);
+  assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
+  assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
+  assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Do not call persona_consult or subagent/);
+  assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);
+  assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /\{previous\}/);
+  assert.match(roundtable.subagentParams.chain[2].task, /Moderator Synthesis/);
+  assert.match(roundtable.subagentParams.chain[2].task, /\{previous\}/);
+});
+
+test("resolveRoundtableLaunchRequest caps the roster at five specialists", async () => {
+  const root = await createWorkspace();
+
+  for (const name of ["alpha", "beta", "delta", "epsilon", "zeta"]) {
+    await writeText(path.join(root, `.pi/agents/${name}.md`), `---
+name: ${name}
+role: specialist
+description: ${name} specialist for market planning.
+tools: read
+docs: docs/shared/
+consults:
+tags: market, planning, ${name}
+---
+${name} prompt.
+`);
+  }
+
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Market planning question across many specialists.",
+  });
+
+  assert.equal(roundtable.roster.length, 5);
+  assert.ok(!roundtable.roster.some((agent) => agent.role === "generalist"));
+});
+
+test("formatRoundtableRosterPreview shows selected specialists and command context", async () => {
+  const root = await createWorkspace();
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+  });
+
+  const preview = formatRoundtableRosterPreview(roundtable);
+
+  assert.match(preview, /# Pi Persona Round-table/);
+  assert.match(preview, /Query: Brand guideline question\./);
+  assert.match(preview, /Moderator: generalist/);
+  assert.match(preview, /- brand - Brand strategy specialist\./);
+  assert.match(preview, /- guideline - Guideline reviewer\./);
 });
 
 test("runSubagentBridgeRequest emits a pi-subagents slash request", async () => {

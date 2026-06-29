@@ -7,8 +7,10 @@ import {
   formatConsultSubagentInstructions,
   formatDoctorReport,
   formatPersonaList,
+  formatRoundtableRosterPreview,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
+  resolveRoundtableLaunchRequest,
   runDoctor,
   sendPersonaOutput,
   runSubagentBridgeRequest,
@@ -23,6 +25,7 @@ const RESERVED_COMMANDS = new Set([
   "parallel",
   "persona",
   "persona-list",
+  "persona-roundtable",
   "resume",
   "run",
   "run-chain",
@@ -155,6 +158,28 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
     },
   });
+
+  pi.registerCommand("persona-roundtable", {
+    description: "Run a Pi Persona round-table over selected specialists",
+    handler: async (args, ctx) => {
+      const query = normalizeCommandText(args);
+      if (!query) {
+        ctx.ui.notify('Usage: /persona-roundtable "query"', "error");
+        return;
+      }
+      try {
+        await registerProjectCommands(ctx.cwd);
+        const roundtable = await resolveRoundtableLaunchRequest(ctx.cwd, { query });
+        const preview = formatRoundtableRosterPreview(roundtable);
+        sendPersonaOutput(pi, ctx, `${preview}\n\nLaunching round-table...`, "info");
+        const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams);
+        const text = bridgeResponseText(response);
+        sendPersonaOutput(pi, ctx, `${preview}\n\n## Result\n\n${text}`, response.isError ? "error" : "info");
+      } catch (error) {
+        sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
 }
 
 function isSafeCommandName(name: string): boolean {
@@ -173,4 +198,16 @@ function bridgeResponseText(response: any): string {
       .trim() || "(no output)";
   }
   return "(no output)";
+}
+
+function normalizeCommandText(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1).trim();
+    }
+  }
+  return trimmed;
 }
