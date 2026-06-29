@@ -27,6 +27,10 @@ export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
       if (done || !matchesRequest(data, requestId)) return;
       finish(() => resolve(data));
     });
+    const unsubscribeUpdate = pi.events.on(SUBAGENT_SLASH_EVENTS.update, (data) => {
+      if (done || !matchesRequest(data, requestId)) return;
+      options.onUpdate?.(data);
+    });
 
     const finish = (next) => {
       if (done) return;
@@ -34,6 +38,7 @@ export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
       clearTimeout(startTimeout);
       unsubscribeStarted?.();
       unsubscribeResponse?.();
+      unsubscribeUpdate?.();
       next();
     };
 

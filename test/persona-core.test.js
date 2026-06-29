@@ -145,6 +145,9 @@ test("extension registers persona-roundtable as a namespaced command", async () 
 
   assert.match(source, /registerCommand\("persona-roundtable"/);
   assert.doesNotMatch(source, /registerCommand\("roundtable"/);
+  assert.match(source, /createRoundtableProgress/);
+  assert.match(source, /onUpdate/);
+  assert.match(source, /setStatus(?:\?\.)?\("pi-persona-roundtable"/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
@@ -863,6 +866,47 @@ test("runSubagentBridgeRequest ignores responses for other request ids", async (
   );
 
   assert.equal(response.result.content[0].text, "right");
+});
+
+test("runSubagentBridgeRequest forwards matching progress updates", async () => {
+  const updates = [];
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    events.emit("subagent:slash:update", {
+      requestId: "other-request",
+      toolCount: 99,
+    });
+    events.emit("subagent:slash:update", {
+      requestId: request.requestId,
+      toolCount: 2,
+      currentTool: "read",
+      progress: [{ agent: "brand", status: "running", toolCount: 2 }],
+    });
+    events.emit("subagent:slash:response", {
+      requestId: request.requestId,
+      result: { content: [{ type: "text", text: "right" }], details: { mode: "single", results: [] } },
+      isError: false,
+    });
+  });
+
+  await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    {
+      requestId: "matching-request",
+      onUpdate(update) {
+        updates.push(update);
+      },
+    },
+  );
+
+  assert.deepEqual(updates, [{
+    requestId: "matching-request",
+    toolCount: 2,
+    currentTool: "read",
+    progress: [{ agent: "brand", status: "running", toolCount: 2 }],
+  }]);
 });
 
 test("runSubagentBridgeRequest accepts delayed bridge start and response", async () => {

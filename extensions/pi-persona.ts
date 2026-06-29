@@ -17,6 +17,8 @@ import {
 } from "../src/persona/index.js";
 
 const REGISTERED_PERSONA_COMMANDS = new Set<string>();
+const ROUNDTABLE_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
+const ROUNDTABLE_VISIBLE_PROGRESS_MS = 8_000;
 const RESERVED_COMMANDS = new Set([
   "agent",
   "chain",
@@ -171,10 +173,24 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         await registerProjectCommands(ctx.cwd);
         const roundtable = await resolveRoundtableLaunchRequest(ctx.cwd, { query });
         const preview = formatRoundtableRosterPreview(roundtable);
-        sendPersonaOutput(pi, ctx, `${preview}\n\nLaunching round-table...`, "info");
-        const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams);
-        const text = bridgeResponseText(response);
-        sendPersonaOutput(pi, ctx, `${preview}\n\n## Result\n\n${text}`, response.isError ? "error" : "info");
+        const progress = createRoundtableProgress(pi, ctx);
+        sendPersonaOutput(
+          pi,
+          ctx,
+          `${preview}\n\nRound-table in progress. Watch the Pi status line for live progress; compact updates will appear until the result returns.`,
+          "info",
+        );
+        try {
+          const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams, {
+            onUpdate(update: unknown) {
+              progress.update(update);
+            },
+          });
+          const text = bridgeResponseText(response);
+          sendPersonaOutput(pi, ctx, `${preview}\n\n## Result\n\n${text}`, response.isError ? "error" : "info");
+        } finally {
+          progress.stop();
+        }
       } catch (error) {
         sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
       }
@@ -210,4 +226,66 @@ function normalizeCommandText(value: string): string {
     }
   }
   return trimmed;
+}
+
+function createRoundtableProgress(pi: ExtensionAPI, ctx: any) {
+  let stopped = false;
+  let frameIndex = 0;
+  let lastVisibleAt = Date.now();
+  let latestDetail = "starting";
+
+  const render = (detail = latestDetail, visible = false) => {
+    if (stopped) return;
+    latestDetail = detail || latestDetail;
+    const frame = ROUNDTABLE_PROGRESS_FRAMES[frameIndex % ROUNDTABLE_PROGRESS_FRAMES.length];
+    frameIndex += 1;
+    ctx.ui?.setStatus?.("pi-persona-roundtable", `round-table ${frame} ${latestDetail}`);
+
+    const now = Date.now();
+    if (visible && now - lastVisibleAt >= ROUNDTABLE_VISIBLE_PROGRESS_MS) {
+      lastVisibleAt = now;
+      sendPersonaOutput(pi, ctx, `Round-table progress ${frame}: ${latestDetail}`, "info");
+    }
+  };
+
+  const timer = setInterval(() => render("running", true), 750);
+  (timer as any).unref?.();
+  render("starting");
+
+  return {
+    update(update: unknown) {
+      render(formatRoundtableProgress(update), true);
+    },
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+      ctx.ui?.setStatus?.("pi-persona-roundtable", undefined);
+    },
+  };
+}
+
+function formatRoundtableProgress(update: any): string {
+  const progress = Array.isArray(update?.progress) ? update.progress : [];
+  const total = progress.length;
+  const completed = progress.filter((entry: any) => entry?.status === "completed").length;
+  const running = progress
+    .filter((entry: any) => entry?.status === "running")
+    .map((entry: any) => {
+      const agent = typeof entry?.agent === "string" && entry.agent ? entry.agent : "agent";
+      const tool = entry?.currentTool ? `:${entry.currentTool}` : "";
+      return `${agent}${tool}`;
+    })
+    .slice(0, 3);
+
+  if (running.length > 0) {
+    return `${running.join(", ")} running${total ? ` (${completed}/${total} done)` : ""}`;
+  }
+  if (total > 0) {
+    return `${completed}/${total} done`;
+  }
+  if (typeof update?.toolCount === "number") {
+    const tool = update.currentTool ? `, ${update.currentTool}` : "";
+    return `${update.toolCount} tools${tool}`;
+  }
+  return "running";
 }
