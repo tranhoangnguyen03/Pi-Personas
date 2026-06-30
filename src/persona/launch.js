@@ -1,4 +1,5 @@
 import { resolveAgentScope } from "./resolver.js";
+import { getPrimaryGeneralistState } from "./agents.js";
 import { buildScopedSubagentParams } from "./runtime.js";
 
 const DEFAULT_EMPTY_TASK = "Start a fresh scoped persona session. Ask the user what they need if no request was supplied.";
@@ -36,8 +37,10 @@ export function formatPersonaList(project) {
     return lines.join("\n");
   }
 
+  const primaryPaths = new Set(getPrimaryGeneralistState(project).effectivePrimary.map((agent) => agent.relativePath));
   for (const agent of project.agents) {
-    lines.push(`- ${agent.name} - ${agent.role}`);
+    const roleLabel = primaryPaths.has(agent.relativePath) ? `${agent.role} (primary)` : agent.role;
+    lines.push(`- ${agent.name} - ${roleLabel}`);
     lines.push(`  ${agent.description}`);
     lines.push(`  docs: ${agent.docs.length ? agent.docs.join(", ") : "none"}`);
     lines.push(`  consults: ${agent.consults.length ? agent.consults.join(", ") : "none"}`);

@@ -63,10 +63,33 @@ function validateAgentFile(file, issues) {
     });
   }
 
+  validatePrimaryField(file, role, issues);
+
   for (const field of RUNTIME_ONLY_FIELDS) {
     if (Object.hasOwn(file.frontmatter, field)) {
       issues.push(runtimeFieldIssue(file, field));
     }
+  }
+}
+
+function validatePrimaryField(file, role, issues) {
+  if (!Object.hasOwn(file.frontmatter, "primary")) return;
+
+  if (typeof file.frontmatter.primary !== "boolean") {
+    issues.push({
+      severity: "error",
+      file: file.relativePath,
+      message: `${file.relativePath}: primary must be true or false`,
+    });
+    return;
+  }
+
+  if (file.frontmatter.primary === true && role !== "generalist") {
+    issues.push({
+      severity: "error",
+      file: file.relativePath,
+      message: `${file.relativePath}: primary: true is only valid on role: generalist`,
+    });
   }
 }
 

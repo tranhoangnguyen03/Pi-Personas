@@ -78,7 +78,7 @@ workflow layer on top.
 - **Two-tier scope.** Shared baseline scope plus additive per-agent scope.
 - **Clean handoff.** One agent launch creates one scoped `pi-subagents` run or
   Pi session. Switching agents starts fresh unless the user explicitly resumes.
-- **Three invocation paths.** Generalist, direct specialist, and round-table.
+- **Three invocation paths.** Primary generalist, direct specialist, and round-table.
 - **Mid-session consultation.** Active agents can invoke allowed peers through
   the same resolver.
 - **Low friction.** Avoid confirmations, gates, policy prompts, and write
@@ -102,8 +102,8 @@ Four moving parts:
 2. **Shared baseline** - `_baseline.md` plus shared docs, merged into every
    agent session.
 3. **Resolver** - generic assembly logic written once.
-4. **Orchestrator** - the generalist running consults and round-tables through
-   `pi-subagents`, with `pi-intercom` available for blocked children.
+4. **Orchestrator** - the primary generalist running consults and round-tables
+   through `pi-subagents`, with `pi-intercom` available for blocked children.
 
 The important invariant: adding a new agent is data, not code. A user should be
 able to create a new agent file, run validation, and launch it without adding a
@@ -163,7 +163,8 @@ higher-value semantic layer, and avoid duplicate runtime machinery.
 .pi/
   agents/
     _baseline.md              # pi-persona baseline; excluded from subagent runs
-    generalist.md             # exactly one generalist
+    generalist.md             # primary generalist
+    backup-generalist.md      # optional non-primary generalist/draft
     brand-strategist.md       # specialist
     launch-reviewer.md        # specialist
     guideline-reviewer.md     # specialist
@@ -209,7 +210,11 @@ it into `_baseline.md` or `docs/shared/`.
 **Writes:** inherited from Pi and the host filesystem. The extension does not
 model per-agent write access by default.
 
-**Generalist constraint:** exactly one file may have `role: generalist`.
+**Primary generalist constraint:** multiple files may have `role: generalist`,
+but exactly one launchable generalist must be selected with `primary: true`.
+Additional generalists are allowed as drafts, backups, or directly launched
+named agents when they use `primary: false`. Primary selection is for
+role-based routing and round-table moderation; it is not a write guardrail.
 
 ---
 
@@ -240,6 +245,7 @@ competitive framing for the user's products and workstreams.
 ---
 name: generalist
 role: generalist
+primary: true
 description: Domain-aware generalist. Routes to specialists or answers directly.
 model: default
 tools: web_search, subagent
@@ -269,6 +275,9 @@ Required fields for persona agents:
 
 - `name` - command-safe unique name.
 - `role` - `generalist` or `specialist`.
+- `primary` - boolean selector for `role: generalist`; one and only one
+  generalist should have `primary: true`, later generalists should use
+  `primary: false`.
 - `description` - short natural-language routing hint.
 - `tools` - additive `pi-subagents`/Pi tool names.
 - `docs` - additive pi-persona doc paths relative to the workspace root.
@@ -281,6 +290,8 @@ Control and runtime files:
 - Copied runtime support roles may use `role: runtime`; they are launchable
   through `pi-subagents` but excluded from generalist routing and round-table
   selection unless the user explicitly invokes them.
+- `primary: true` is only valid for `role: generalist`; specialists should omit
+  the field.
 
 Adapter-derived runtime fields:
 
@@ -353,6 +364,7 @@ semantic fields, but it should not create a second agent registry.
 
 - `name`
 - `role`
+- `primary` for generalist agents
 - `description`
 - `tools`
 - `docs`
@@ -362,6 +374,14 @@ semantic fields, but it should not create a second agent registry.
 
 Runtime adapter fields stay out of the scaffold unless the user explicitly asks
 for an advanced override.
+
+When `/persona new <name> --role generalist` creates the first generalist, it
+should write `primary: true`. When a generalist already exists, it should still
+create the new file with `primary: false` and emit an immediate warning: one
+and only one generalist must be set to `primary: true` before
+primary-generalist routing and round-table moderation can run. Creation remains
+low-friction; the readiness gate is `/persona doctor` plus runtime commands
+that need a primary generalist.
 
 The authoring flow should ask only for missing essentials:
 
@@ -442,7 +462,7 @@ function assemble(agentName):
 The resolver is the single assembly machine for:
 
 - Direct specialist launch.
-- Generalist launch.
+- Primary generalist launch.
 - Specialist consult.
 - Round-table participant launch.
 - Agent validation previews.
@@ -460,9 +480,10 @@ the consultant's resolved scope.
 
 ## 9. Invocation Model
 
-### Tier 1 - Generalist: `/generalist`
+### Tier 1 - Primary Generalist: `/<primary-generalist-name>`
 
-Starts a generalist Pi session. The generalist answers directly when shared
+Starts the primary generalist Pi session, usually `/generalist` when the agent
+is named `generalist`. The primary generalist answers directly when shared
 context is enough. It consults specialists only when the task clearly needs a
 specialist perspective.
 
@@ -479,14 +500,15 @@ history.
 
 ### Tier 3 - Round-table: `/persona-roundtable <query>`
 
-The generalist selects up to five relevant specialists and convenes them into a
-short Delphi-style process.
+The primary generalist selects up to five relevant specialists and convenes
+them into a short Delphi-style process.
 
 ### Discovery: `/persona-list`
 
-Lists the generalist and all specialists. It is read-only and does not launch
-anything. The list should show each persona's role, description, docs, and
-consult peers. Users launch agents directly with `/<agent-name>`.
+Lists the primary generalist, any non-primary generalists, and all specialists.
+It is read-only and does not launch anything. The list should show each
+persona's role, primary status where relevant, description, docs, and consult
+peers. Users launch agents directly with `/<agent-name>`.
 
 Direct user launches create fresh sessions by default. Resume behavior uses Pi's
 native thread/session mechanism if available. Agent-to-agent consults also use
@@ -591,7 +613,7 @@ When the user invokes `/persona-roundtable <query>`:
 
 ### Step 0 - Convene
 
-The generalist selects up to five specialists using simple relevance over
+The primary generalist selects up to five specialists using simple relevance over
 `tags`, `description`, and declared `docs`. The roster is shown to the user
 before round 1 begins.
 
@@ -624,7 +646,7 @@ specialist revises, qualifies, reinforces, or concedes.
 
 ### Step 3 - Moderator Synthesis
 
-The generalist synthesizes:
+The primary generalist synthesizes:
 
 - Where specialists converged.
 - Where tensions remain.
@@ -710,7 +732,7 @@ reliably:
 - Required frontmatter exists.
 - Agent files are compatible with `pi-subagents` project-level discovery.
 - `name` values are unique.
-- Exactly one generalist exists.
+- Exactly one primary generalist resolves for role-based routing.
 - `consults` references point to existing agents or valid `all`.
 - Agents with non-empty `consults` list `subagent` in `tools`, because
   pi-subagents requires that declaration to enable child-safe nested fanout.
@@ -728,7 +750,8 @@ Examples:
 
 - `brand-strategist: docs/workstreams/brand/ does not exist`
 - `launch-reviewer: consults unknown agent guideline-reviewr`
-- `generalist: role generalist appears in 2 files`
+- `doctor: multiple primary generalist agents: generalist, backup-generalist`
+- `doctor: found 0 primary generalists among 2 generalists`
 - `secretary: tool calendar_lookup is not registered in Pi`
 - `runtime.worker: copied from pi-subagents 0.31.0; installed builtin changed`
 - `dependency: pi-intercom is installed but not loaded in this Pi session`
@@ -770,9 +793,10 @@ a valid file. The user can iterate.
 6. **Baseline wiring.** Support `_baseline.md` and `docs/shared/`.
 7. **Direct specialist launch.** Launch `/<specialist-name>` sessions.
 8. **Doctor.** Validate dependencies, schema, docs, tools, runtime compatibility,
-   copied builtin provenance, and generalist uniqueness.
+   copied builtin provenance, and primary-generalist uniqueness.
 9. **Conversational authoring.** Create/edit agents through Pi.
-10. **Generalist launch.** Add `/generalist` with simple routing.
+10. **Primary generalist launch.** Support direct launch of the configured
+    primary generalist, usually `/generalist`.
 11. **Consult mechanism.** Add one-hop peer consults with summarized/fresh
     context by default and forked requester context as a deliberate envelope
     option.
@@ -812,7 +836,7 @@ Step 14 makes the user's initial operating layer real.
 | Consult provenance | Compact footer in the requester synthesis |
 | Consult scope | Consultant scope always resolves from consultant file plus baseline |
 | Consult topology | One-hop, parallel fan-out, barrier fan-in through `pi-subagents` |
-| Generalist count | Exactly one |
+| Primary generalist | Exactly one `role: generalist` with `primary: true` |
 | Round-table membership | Ad hoc, up to five specialists |
 | Discourse protocol | Independent, reveal/revise, synthesize |
 | Supervisor bridge | `pi-intercom/contact_supervisor` only for blocked or plan-changing updates |
@@ -899,10 +923,10 @@ unrequested conversational state from the first.
 Resume a prior specialist session using Pi's native mechanism. Pass: state
 restores only when explicitly resumed.
 
-### Phase 5 - Generalist And Consults
+### Phase 5 - Primary Generalist And Consults
 
-**Test 5.1 - Direct generalist answer.**
-Ask a question answerable from shared docs. Pass: the generalist answers
+**Test 5.1 - Direct primary generalist answer.**
+Ask a question answerable from shared docs. Pass: the primary generalist answers
 without consulting a specialist.
 
 **Test 5.2 - Specialist consult.**
@@ -958,8 +982,8 @@ Have a consulted agent encounter a blocking decision. Pass: it uses
 ### Phase 6 - Round-table
 
 **Test 6.1 - Convene roster.**
-Invoke `/persona-roundtable` with a cross-functional question. Pass: the generalist
-selects up to five plausible specialists and shows the roster.
+Invoke `/persona-roundtable` with a cross-functional question. Pass: the primary
+generalist selects up to five plausible specialists and shows the roster.
 
 **Test 6.2 - Roster override.**
 After roster preview, ask to remove one specialist and add another. Pass: the
@@ -993,9 +1017,13 @@ and does not launch anything.
 Add a new specialist file. Pass: existing agents keep working; the new agent
 appears in `/persona-list` and can be launched directly with `/<agent-name>`.
 
-**Test 7.4 - Duplicate generalist.**
-Create a second generalist. Pass: `/persona doctor` flags it and resolver refuses
-ambiguous launch.
+**Test 7.4 - Secondary generalist and duplicate primary.**
+Create a second generalist through `/persona new`. Pass: the new file is created
+with `primary: false`, the user sees an immediate warning, `/persona doctor`
+still passes, and round-table continues to use the existing primary generalist.
+Then manually set both generalists to `primary: true`. Pass: `/persona doctor`
+flags multiple primary generalists and round-table refuses ambiguous moderation
+until one and only one generalist is set to `primary: true`.
 
 ---
 

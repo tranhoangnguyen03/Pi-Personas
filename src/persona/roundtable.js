@@ -1,4 +1,4 @@
-import { assertUniqueAgentNames, discoverPersonaProject } from "./agents.js";
+import { assertUniqueAgentNames, discoverPersonaProject, findPrimaryGeneralist } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentStep } from "./runtime.js";
 
@@ -9,7 +9,7 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
   const context = input.context === "fork" ? "fork" : "fresh";
   const project = await discoverPersonaProject(root);
   assertUniqueAgentNames(project);
-  const generalist = findGeneralist(project);
+  const generalist = findPrimaryGeneralist(project, "roundtable");
   const roster = selectRoundtableRoster(project, query);
   if (roster.length === 0) {
     throw new Error("roundtable requires at least one specialist agent");
@@ -176,14 +176,6 @@ function tokenize(value) {
 
 function formatRosterNames(roster) {
   return roster.map((agent) => agent.name).join(", ");
-}
-
-function findGeneralist(project) {
-  const generalists = project.agents.filter((agent) => agent.role === "generalist");
-  if (generalists.length !== 1) {
-    throw new Error(`roundtable requires exactly one generalist; found ${generalists.length}`);
-  }
-  return generalists[0];
 }
 
 function requireText(value, field) {

@@ -46,6 +46,7 @@ Shared operating context.
   await writeText(path.join(root, ".pi/agents/generalist.md"), `---
 name: generalist
 role: generalist
+primary: true
 description: Routes to specialists.
 tools: read, subagent
 docs: docs/shared/
@@ -224,6 +225,7 @@ Duplicate prompt.
   await writeText(path.join(root, ".pi/agents/another-generalist.md"), `---
 name: second-generalist
 role: generalist
+primary: true
 description: Extra generalist.
 tools: read
 docs: docs/shared/
@@ -250,11 +252,29 @@ Bad control prompt.
   const messages = result.issues.map((issue) => issue.message);
   assert.equal(result.status, "error");
   assert.ok(messages.some((message) => message.includes("duplicate agent name 'brand'")));
-  assert.ok(messages.some((message) => message.includes("multiple generalist agents")));
+  assert.ok(messages.some((message) => message.includes("multiple primary generalist agents")));
+  assert.ok(messages.some((message) => message.includes("Set exactly one generalist to primary: true")));
   assert.ok(messages.some((message) => message.includes("docs path does not exist: docs/missing/")));
   assert.ok(messages.some((message) => message.includes("consults unknown agent 'missing-peer'")));
   assert.ok(messages.some((message) => message.includes("unknown tool 'fake_tool'")));
   assert.ok(messages.some((message) => message.includes("control file is launchable")));
+});
+
+test("agent scaffold marks first generalist primary and later generalists non-primary with warning", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-primary-"));
+
+  const first = await createAgentScaffold(root, "Generalist", { role: "generalist" });
+  const second = await createAgentScaffold(root, "Backup Generalist", { role: "generalist" });
+
+  assert.match(first.content, /role: generalist\nprimary: true/);
+  assert.equal(first.options.primary, true);
+  assert.deepEqual(first.warnings, []);
+  assert.match(second.content, /role: generalist\nprimary: false/);
+  assert.equal(second.options.primary, false);
+  assert.ok(second.warnings.some((warning) => warning.includes("created as primary: false")));
+  assert.ok(second.warnings.some((warning) => warning.includes("Set exactly one generalist to primary: true")));
+  assert.match(formatAgentScaffoldCreatedMessage(second), /Warning:/);
+  assert.match(formatAgentScaffoldCreatedMessage(second), /backup-generalist/);
 });
 
 test("doctor recognizes persona_consult as a Pi Persona runtime tool", async () => {
@@ -346,7 +366,7 @@ test("formats doctor report with actionable sections", async () => {
   assert.match(report, /Pi Persona Doctor/);
   assert.match(report, /Dependencies/);
   assert.match(report, /Agents: 3 launchable/);
-  assert.match(report, /Generalist: generalist/);
+  assert.match(report, /Primary generalist: generalist/);
   assert.match(report, /Status: pass/);
 });
 
@@ -396,6 +416,28 @@ inheritSkills: false
 Runtime leak prompt.
 `);
 
+  await writeText(path.join(root, ".pi/agents/specialist-primary.md"), `---
+name: specialist-primary
+role: specialist
+primary: true
+description: Specialist with invalid primary flag.
+tools: read
+docs: docs/shared/
+---
+Specialist primary prompt.
+`);
+
+  await writeText(path.join(root, ".pi/agents/string-primary.md"), `---
+name: string-primary
+role: generalist
+primary: "true"
+description: Generalist with invalid primary value.
+tools: read
+docs: docs/shared/
+---
+String primary prompt.
+`);
+
   const result = await runDoctor(root, {
     dependencyStatus: {
       piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
@@ -411,6 +453,8 @@ Runtime leak prompt.
   assert.ok(messages.some((message) => message.includes("runtime-only field 'defaultReads'")));
   assert.ok(messages.some((message) => message.includes("runtime-only field 'systemPromptMode'")));
   assert.ok(messages.some((message) => message.includes("runtime-only field 'inheritSkills'")));
+  assert.ok(messages.some((message) => message.includes("primary: true is only valid on role: generalist")));
+  assert.ok(messages.some((message) => message.includes("primary must be true or false")));
 });
 
 test("doctor requires exactly one generalist", async () => {
@@ -436,7 +480,65 @@ Brand prompt.
   });
 
   assert.equal(result.status, "error");
-  assert.ok(result.issues.some((issue) => issue.message.includes("exactly one generalist required")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("exactly one primary generalist required")));
+});
+
+test("doctor allows multiple generalists when exactly one is primary", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/backup-generalist.md"), `---
+name: backup-generalist
+role: generalist
+primary: false
+description: Backup generalist.
+tools: read, subagent
+docs: docs/shared/
+consults: all
+---
+Backup generalist prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "pass");
+  assert.equal(result.project.agents.filter((agent) => agent.role === "generalist").length, 2);
+  assert.equal(result.project.agents.find((agent) => agent.name === "generalist").primary, true);
+  assert.equal(result.project.agents.find((agent) => agent.name === "backup-generalist").primary, false);
+});
+
+test("doctor rejects multiple primary generalists with remediation", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/backup-generalist.md"), `---
+name: backup-generalist
+role: generalist
+primary: true
+description: Backup generalist.
+tools: read, subagent
+docs: docs/shared/
+consults: all
+---
+Backup generalist prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  const messages = result.issues.map((issue) => issue.message);
+  assert.equal(result.status, "error");
+  assert.ok(messages.some((message) => message.includes("multiple primary generalist agents")));
+  assert.ok(messages.some((message) => message.includes(".pi/agents/generalist.md")));
+  assert.ok(messages.some((message) => message.includes(".pi/agents/backup-generalist.md")));
+  assert.ok(messages.some((message) => message.includes("Set exactly one generalist to primary: true")));
 });
 
 test("runtime role files are launchable but excluded from generalist requirements", async () => {
@@ -752,7 +854,7 @@ test("formatPersonaList shows read-only discovery details", async () => {
   const output = formatPersonaList(project);
 
   assert.match(output, /# Pi Personas/);
-  assert.match(output, /generalist - generalist/);
+  assert.match(output, /generalist - generalist \(primary\)/);
   assert.match(output, /Routes to specialists\./);
   assert.match(output, /docs: docs\/shared\//);
   assert.match(output, /consults: all/);
@@ -1206,7 +1308,7 @@ Shared pilot context.
 
   const initialProject = await discoverPersonaProject(root);
   const list = formatPersonaList(initialProject);
-  assert.match(list, /generalist - generalist/);
+  assert.match(list, /generalist - generalist \(primary\)/);
   assert.match(list, /brand - specialist/);
   assert.match(list, /docs: docs\/workstreams\/brand\//);
   assert.match(list, /consults: guideline/);
@@ -1262,10 +1364,10 @@ Shared pilot context.
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
-  assert.equal(duplicateDoctor.status, "error");
-  assert.ok(duplicateDoctor.issues.some((issue) => issue.message.includes("multiple generalist agents")));
-  await assert.rejects(
-    () => resolveRoundtableLaunchRequest(root, { query: "Ambiguous moderator question." }),
-    /roundtable requires exactly one generalist; found 2/,
-  );
+  assert.equal(duplicateDoctor.status, "pass");
+  const finalProject = await discoverPersonaProject(root);
+  const backup = finalProject.agents.find((agent) => agent.name === "backup-generalist");
+  assert.equal(backup.primary, false);
+  const stableRoundtable = await resolveRoundtableLaunchRequest(root, { query: "Stable moderator question." });
+  assert.equal(stableRoundtable.generalist.name, "generalist");
 });

@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { discoverPersonaProject, pathExists, resolveWorkspacePath } from "./agents.js";
+import {
+  discoverPersonaProject,
+  formatPrimaryGeneralistError,
+  getPrimaryGeneralistState,
+  pathExists,
+  resolveWorkspacePath,
+} from "./agents.js";
 import { validatePersonaSchema } from "./schema.js";
 
 const KNOWN_TOOLS = new Set([
@@ -63,8 +69,9 @@ export function formatDoctorReport(result) {
     `Agents: ${result.project.agents.length} launchable`,
   ];
 
-  const generalists = result.project.agents.filter((agent) => agent.role === "generalist");
-  lines.push(`Generalist: ${generalists.length === 1 ? generalists[0].name : generalists.length}`);
+  const primaryState = getPrimaryGeneralistState(result.project);
+  lines.push(`Primary generalist: ${primaryState.effectivePrimary.length === 1 ? primaryState.effectivePrimary[0].name : primaryState.effectivePrimary.length}`);
+  lines.push(`Generalists: ${primaryState.generalists.length}`);
 
   if (result.project.baseline) {
     lines.push(`Baseline: ${result.project.baseline.relativePath}`);
@@ -156,16 +163,11 @@ function collectDuplicateNameIssues(project, issues) {
 }
 
 function collectGeneralistIssues(project, issues) {
-  const generalists = project.agents.filter((agent) => agent.role === "generalist");
-  if (generalists.length === 0) {
+  const state = getPrimaryGeneralistState(project);
+  if (state.effectivePrimary.length !== 1) {
     issues.push({
       severity: "error",
-      message: "exactly one generalist required; found 0",
-    });
-  } else if (generalists.length > 1) {
-    issues.push({
-      severity: "error",
-      message: `multiple generalist agents: ${generalists.map((agent) => agent.name).join(", ")}`,
+      message: formatPrimaryGeneralistError(state, "doctor"),
     });
   }
 }

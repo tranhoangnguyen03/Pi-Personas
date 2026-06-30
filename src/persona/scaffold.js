@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { discoverPersonaProject } from "./agents.js";
+
 const ALLOWED_OPTIONS = new Set(["role", "description", "tools", "docs", "consults", "tags"]);
 const LIST_OPTIONS = new Set(["tools", "docs", "consults", "tags"]);
 const VALID_ROLES = new Set(["generalist", "specialist"]);
@@ -24,6 +26,9 @@ export function renderAgentScaffold(agentName, options = {}) {
   const title = options.title ?? titleFromName(agentName);
   const role = normalizeRole(options.role ?? "specialist");
   const description = normalizeDescription(options.description ?? `${title} specialist.`);
+  const primaryLine = role === "generalist" && typeof options.primary === "boolean"
+    ? `primary: ${options.primary}\n`
+    : "";
   const tools = normalizeList(options.tools).join(", ");
   const docs = normalizeList(options.docs).join(", ");
   const consults = normalizeList(options.consults).join(", ");
@@ -32,7 +37,7 @@ export function renderAgentScaffold(agentName, options = {}) {
   return `---
 name: ${agentName}
 role: ${role}
-description: ${description}
+${primaryLine}description: ${description}
 tools:${tools ? ` ${tools}` : ""}
 docs:${docs ? ` ${docs}` : ""}
 consults:${consults ? ` ${consults}` : ""}
@@ -99,9 +104,17 @@ export function parsePersonaNewArgs(args) {
 
 export async function createAgentScaffold(root, rawName, options = {}) {
   const agentName = normalizeAgentName(rawName);
+  const role = normalizeRole(options.role ?? "specialist");
+  const primary = await defaultPrimaryForRole(root, role);
+  const warnings = buildPrimaryWarnings(agentName, primary);
   const relativePath = `.pi/agents/${agentName}.md`;
   const filePath = path.join(root, relativePath);
-  const content = renderAgentScaffold(agentName, { ...options, title: titleFromName(rawName) });
+  const content = renderAgentScaffold(agentName, {
+    ...options,
+    role,
+    primary,
+    title: titleFromName(rawName),
+  });
 
   await mkdir(path.dirname(filePath), { recursive: true });
   try {
@@ -118,8 +131,10 @@ export async function createAgentScaffold(root, rawName, options = {}) {
     filePath,
     relativePath,
     content,
+    warnings,
     options: {
-      role: normalizeRole(options.role ?? "specialist"),
+      role,
+      primary,
       description: normalizeDescription(options.description ?? `${titleFromName(rawName)} specialist.`),
       tools: normalizeList(options.tools),
       docs: normalizeList(options.docs),
@@ -145,8 +160,30 @@ export function formatAgentScaffoldCreatedMessage(result) {
   } else {
     lines.push("Tools: none");
   }
+  if (result.options.role === "generalist") {
+    lines.push(`Primary: ${result.options.primary ? "true" : "false"}`);
+  }
+  if (result.warnings?.length > 0) {
+    lines.push("", "Warning:");
+    for (const warning of result.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
   lines.push("Next: run /persona doctor");
   return lines.join("\n");
+}
+
+async function defaultPrimaryForRole(root, role) {
+  if (role !== "generalist") return undefined;
+  const project = await discoverPersonaProject(root);
+  return project.agents.filter((agent) => agent.role === "generalist").length === 0;
+}
+
+function buildPrimaryWarnings(agentName, primary) {
+  if (primary !== false) return [];
+  return [
+    `${agentName} was created as primary: false because another generalist already exists. Set exactly one generalist to primary: true and set the others to primary: false before using primary generalist routing.`,
+  ];
 }
 
 function titleFromName(input) {

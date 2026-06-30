@@ -74,13 +74,52 @@ export function assertUniqueAgentNames(project) {
   }
 }
 
+export function getPrimaryGeneralistState(project) {
+  const generalists = project.agents.filter((agent) => agent.role === "generalist");
+  const explicitPrimary = generalists.filter((agent) => agent.primary === true);
+  const primaryDeclared = generalists.some((agent) => agent.primaryDeclared);
+  const effectivePrimary = explicitPrimary.length > 0
+    ? explicitPrimary
+    : !primaryDeclared && generalists.length === 1
+      ? generalists
+      : [];
+
+  return {
+    generalists,
+    explicitPrimary,
+    effectivePrimary,
+    primaryDeclared,
+  };
+}
+
+export function findPrimaryGeneralist(project, purpose = "generalist routing") {
+  const state = getPrimaryGeneralistState(project);
+  if (state.effectivePrimary.length === 1) return state.effectivePrimary[0];
+  throw new Error(formatPrimaryGeneralistError(state, purpose));
+}
+
+export function formatPrimaryGeneralistError(state, purpose = "generalist routing") {
+  if (state.generalists.length === 0) {
+    return `exactly one primary generalist required for ${purpose}; found 0 generalists`;
+  }
+
+  if (state.explicitPrimary.length > 1) {
+    return `multiple primary generalist agents for ${purpose}: ${formatAgentNamesAndPaths(state.explicitPrimary)}. Set exactly one generalist to primary: true and set the others to primary: false.`;
+  }
+
+  return `exactly one primary generalist required for ${purpose}; found 0 primary generalists among ${state.generalists.length} generalists: ${formatAgentNamesAndPaths(state.generalists)}. Set exactly one generalist to primary: true and set the others to primary: false.`;
+}
+
 function toAgent(file) {
+  const primaryDeclared = Object.hasOwn(file.frontmatter, "primary");
   return {
     filePath: file.filePath,
     relativePath: file.relativePath,
     fileName: file.fileName,
     name: file.frontmatter.name,
     role: file.frontmatter.role ?? "specialist",
+    primary: file.frontmatter.primary === true,
+    primaryDeclared,
     description: file.frontmatter.description,
     model: file.frontmatter.model,
     tools: file.frontmatter.tools ?? [],
@@ -94,6 +133,10 @@ function toAgent(file) {
 
 function formatAgentPaths(agents) {
   return agents.map((agent) => agent.relativePath).join(", ");
+}
+
+function formatAgentNamesAndPaths(agents) {
+  return agents.map((agent) => `${agent.name} (${agent.relativePath})`).join(", ");
 }
 
 async function listMarkdownFiles(dir) {
