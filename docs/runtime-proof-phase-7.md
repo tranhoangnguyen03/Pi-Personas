@@ -180,6 +180,7 @@ roundtable requires exactly one generalist; found 2
   - `/persona doctor` and round-table fail only when zero or multiple primary
     generalists exist.
 - Directory docs are ergonomic but caused child agents to request file
-  manifests when the runtime could not list directories. Future resolver work
-  should expand or manifest directory docs without changing the user-facing
+  manifests when the runtime could not list directories. The follow-up resolver
+  change expands directory docs into concrete runtime file reads and adds a
+  resolved-file manifest to child prompts without changing the user-facing
   schema.

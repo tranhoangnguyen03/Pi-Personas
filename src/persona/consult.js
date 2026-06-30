@@ -1,6 +1,6 @@
 import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
-import { buildScopedSubagentParams } from "./runtime.js";
+import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
 
 export function buildConsultEnvelope(input) {
   const requester = requireText(input.requester, "requester");
@@ -84,9 +84,8 @@ export function formatConsultSubagentInstructions(consultRequest) {
 function buildConsultTask(scope, envelope) {
   const { consult } = envelope;
   const sections = [];
-  if (scope.docs.length > 0) {
-    sections.push(`[Read from: ${scope.docs.join(", ")}]`);
-  }
+  const docPreamble = formatDocReadPreamble(scope);
+  if (docPreamble) sections.push(docPreamble);
 
   sections.push([
     "## Pi Persona Consult",

@@ -1,6 +1,6 @@
 import { assertUniqueAgentNames, discoverPersonaProject, findPrimaryGeneralist } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
-import { buildScopedSubagentStep } from "./runtime.js";
+import { buildScopedSubagentStep, formatDocReadPreamble } from "./runtime.js";
 
 const MAX_ROSTER_SIZE = 5;
 
@@ -151,8 +151,9 @@ function buildSynthesisTask(scope, query, roster) {
 }
 
 function withDocs(scope, task) {
-  if (scope.docs.length === 0) return task;
-  return `[Read from: ${scope.docs.join(", ")}]\n\n${task}`;
+  const docPreamble = formatDocReadPreamble(scope);
+  if (!docPreamble) return task;
+  return `${docPreamble}\n\n${task}`;
 }
 
 function scoreAgent(agent, query) {

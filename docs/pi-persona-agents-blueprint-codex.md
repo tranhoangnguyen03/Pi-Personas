@@ -297,7 +297,9 @@ Adapter-derived runtime fields:
 
 - `docs` is the authoritative user-facing doc field.
 - The resolver derives `pi-subagents` preload fields such as `defaultReads` from
-  `docs`; users should not maintain both.
+  `docs`; users should not maintain both. If a declared doc path is a directory,
+  the resolver expands it into concrete workspace file paths for runtime reads
+  and includes a resolved-file manifest in the child prompt.
 - Runtime details such as `systemPromptMode`, `inheritProjectContext`, and
   `inheritSkills` belong in the adapter defaults unless an advanced project
   deliberately overrides them.
@@ -411,7 +413,9 @@ Recommended pattern:
 Document deployment is intentionally file-native. Users can use git, sync
 folders, shared drives, generated markdown, PDFs, or whatever Pi can already
 read. Pi Persona Agents only loads or references the paths declared in agent
-files.
+files. Directory paths are allowed in the user-facing schema; at launch time,
+Pi Persona expands them to concrete file paths so child sessions do not need to
+list directories.
 
 ### 7.3 Setting Up And Deploying Tools
 

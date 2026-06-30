@@ -1,6 +1,6 @@
 import { resolveAgentScope } from "./resolver.js";
 import { getPrimaryGeneralistState } from "./agents.js";
-import { buildScopedSubagentParams } from "./runtime.js";
+import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
 
 const DEFAULT_EMPTY_TASK = "Start a fresh scoped persona session. Ask the user what they need if no request was supplied.";
 
@@ -51,9 +51,8 @@ export function formatPersonaList(project) {
 
 function buildLaunchTask(scope, userTask) {
   const sections = [];
-  if (scope.docs.length > 0) {
-    sections.push(`[Read from: ${scope.docs.join(", ")}]`);
-  }
+  const docPreamble = formatDocReadPreamble(scope);
+  if (docPreamble) sections.push(docPreamble);
 
   sections.push([
     "## Pi Persona Scope",

@@ -345,11 +345,41 @@ test("resolver preview merges baseline and agent scope while deriving runtime fi
     "guideline",
   ]);
   assert.deepEqual(preview.derived.defaultReads, [
-    "docs/shared/",
-    "docs/workstreams/brand/",
+    "docs/shared/company.md",
+    "docs/workstreams/brand/brief.md",
   ]);
   assert.equal(Object.hasOwn(preview.agent.frontmatter, "defaultReads"), false);
   assert.equal(Object.hasOwn(preview.agent.frontmatter, "systemPromptMode"), false);
+});
+
+test("resolver expands directory docs into concrete runtime reads while preserving declared docs", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, "docs/workstreams/brand/examples/example.md"), "Brand example doc\n");
+
+  const scope = await resolveAgentScope(root, "brand");
+
+  assert.deepEqual(scope.docs, [
+    "docs/shared/",
+    "docs/workstreams/brand/",
+  ]);
+  assert.deepEqual(scope.derived.defaultReads, [
+    "docs/shared/company.md",
+    "docs/workstreams/brand/brief.md",
+    "docs/workstreams/brand/examples/example.md",
+  ]);
+  assert.deepEqual(scope.derived.docManifest, [
+    {
+      declared: "docs/shared/",
+      files: ["docs/shared/company.md"],
+    },
+    {
+      declared: "docs/workstreams/brand/",
+      files: [
+        "docs/workstreams/brand/brief.md",
+        "docs/workstreams/brand/examples/example.md",
+      ],
+    },
+  ]);
 });
 
 test("formats doctor report with actionable sections", async () => {
@@ -651,8 +681,8 @@ Operator prompt.
     "brand",
   ]);
   assert.deepEqual(scope.derived.defaultReads, [
-    "docs/shared/",
-    "docs/workstreams/operator/",
+    "docs/shared/company.md",
+    "docs/workstreams/operator/runbook.md",
   ]);
   assert.match(scope.prompt, /Shared operating context/);
   assert.match(scope.prompt, /Operator prompt/);
@@ -683,8 +713,13 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
     clarify: false,
     agentScope: "both",
     context: "fresh",
+    reads: [
+      "docs/shared/company.md",
+      "docs/workstreams/brand/brief.md",
+    ],
   });
-  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/, docs\/workstreams\/brand\/\]/);
+  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
+  assert.match(launch.subagentParams.task, /Resolved doc files:\n- docs\/shared\/: docs\/shared\/company\.md\n- docs\/workstreams\/brand\/: docs\/workstreams\/brand\/brief\.md/);
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
   assert.match(launch.subagentParams.task, /Tool: subagent/);
@@ -745,6 +780,11 @@ test("resolveConsultLaunchRequest builds summarized fresh consultant scope by de
   assert.deepEqual(consult.consults, []);
   assert.equal(consult.subagentParams.agent, "guideline");
   assert.equal(consult.subagentParams.context, "fresh");
+  assert.deepEqual(consult.subagentParams.reads, [
+    "docs/shared/company.md",
+    "docs/workstreams/guideline/rules.md",
+  ]);
+  assert.match(consult.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
   assert.match(consult.subagentParams.task, /consultant: guideline/);
   assert.match(consult.subagentParams.task, /summary: The requester is revising launch copy/);
   assert.doesNotMatch(consult.subagentParams.task, /Brand prompt/);
@@ -898,10 +938,10 @@ Pricing prompt.
   assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
   const pricingRoundOne = roundtable.subagentParams.chain[0].parallel.find((step) => step.agent === "pricing");
   const brandRoundTwo = roundtable.subagentParams.chain[1].parallel.find((step) => step.agent === "brand");
-  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/", "docs/workstreams/pricing/"]);
+  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
   assert.equal(pricingRoundOne.model, "openai/gpt-5");
-  assert.deepEqual(brandRoundTwo.reads, ["docs/shared/", "docs/workstreams/brand/"]);
-  assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/"]);
+  assert.deepEqual(brandRoundTwo.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
+  assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/company.md"]);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Do not call persona_consult or subagent/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);

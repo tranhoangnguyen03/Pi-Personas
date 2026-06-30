@@ -8,6 +8,7 @@ export function buildScopedSubagentParams(scope, task, options = {}) {
     context,
   };
 
+  applyReadOverride(params, scope);
   applyModelOverride(params, scope);
   return params;
 }
@@ -24,11 +25,40 @@ export function buildScopedSubagentStep(scope, task) {
 }
 
 function applyReadOverride(target, scope) {
-  if (scope.docs.length === 0) return;
-  target.reads = [...scope.docs];
+  const reads = getRuntimeReads(scope);
+  if (reads.length === 0) return;
+  target.reads = reads;
 }
 
 function applyModelOverride(target, scope) {
   if (!scope.agent.model) return;
   target.model = scope.agent.model;
+}
+
+export function formatDocReadPreamble(scope) {
+  const reads = getRuntimeReads(scope);
+  if (reads.length === 0) return "";
+
+  const lines = [`[Read from: ${reads.join(", ")}]`];
+  const manifestLines = formatDocManifest(scope);
+  if (manifestLines.length > 0) {
+    lines.push("", "Resolved doc files:", ...manifestLines);
+  }
+
+  return lines.join("\n");
+}
+
+function getRuntimeReads(scope) {
+  return [...(scope.derived?.defaultReads ?? scope.docs ?? [])];
+}
+
+function formatDocManifest(scope) {
+  const manifest = scope.derived?.docManifest ?? [];
+  if (!manifest.some((entry) => entry.files?.length > 0 && (entry.files.length !== 1 || entry.files[0] !== entry.declared))) {
+    return [];
+  }
+
+  return manifest
+    .filter((entry) => entry.files?.length > 0)
+    .map((entry) => `- ${entry.declared}: ${entry.files.join(", ")}`);
 }
