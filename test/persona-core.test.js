@@ -33,6 +33,10 @@ async function writeText(filePath, text) {
   await writeFile(filePath, text, "utf8");
 }
 
+async function readJson(filePath) {
+  return JSON.parse(await readFile(filePath, "utf8"));
+}
+
 async function createWorkspace() {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-test-"));
 
@@ -78,6 +82,15 @@ Guideline prompt.
   await writeText(path.join(root, ".pi/skills/shared/skills.md"), "Shared skill guidance\n");
   await writeText(path.join(root, ".pi/skills/workstreams/brand/skills.md"), "Brand skill guidance\n");
   await writeText(path.join(root, ".pi/skills/workstreams/guideline/skills.md"), "Guideline skill guidance\n");
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+    subagents: {
+      agentOverrides: {
+        generalist: { tools: ["subagent"] },
+        brand: { tools: ["subagent"] },
+        guideline: { tools: ["subagent"] },
+      },
+    },
+  }, null, 2)}\n`);
 
   return root;
 }
@@ -319,6 +332,57 @@ Brand prompt.
   assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: .pi/skills/workstreams/empty/ exists but no skills.md was found")));
 });
 
+test("doctor warns when a persona lacks nested consult runtime provisioning", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/manual.md"), `---
+name: manual
+role: specialist
+description: Manually created specialist.
+docs: docs/shared/
+skills: .pi/skills/shared/
+---
+Manual prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "warning");
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/manual.md: nested persona consults need project runtime override tools: subagent")));
+});
+
+test("doctor treats legacy tools subagent as nested consult provisioning without duplicate warning", async () => {
+  const root = await createWorkspace();
+
+  await writeText(path.join(root, ".pi/agents/manual.md"), `---
+name: manual
+role: specialist
+description: Manually created specialist.
+tools: subagent
+docs: docs/shared/
+skills: .pi/skills/shared/
+---
+Manual prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+  const manualIssues = result.issues.filter((issue) => issue.file === ".pi/agents/manual.md");
+
+  assert.equal(result.status, "warning");
+  assert.ok(manualIssues.some((issue) => issue.message.includes("legacy field tools found")));
+  assert.equal(manualIssues.some((issue) => issue.message.includes("nested persona consults need project runtime override")), false);
+});
+
 test("resolver preview merges baseline and agent awareness while deriving runtime fields", async () => {
   const root = await createWorkspace();
 
@@ -503,6 +567,9 @@ description: Backup generalist.
 ---
 Backup generalist prompt.
 `);
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  settings.subagents.agentOverrides["backup-generalist"] = { tools: ["subagent"] };
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
 
   const result = await runDoctor(root, {
     dependencyStatus: {
@@ -1205,6 +1272,9 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
 
   const project = await discoverPersonaProject(root);
   assert.deepEqual(project.agents.map((agent) => agent.name), ["market-researcher"]);
+
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  assert.deepEqual(settings.subagents.agentOverrides["market-researcher"].tools, ["subagent"]);
 });
 
 test("createAgentScaffold writes provided setup metadata without runtime fields", async () => {
@@ -1235,6 +1305,47 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
   assert.equal(agent.description, "Market research specialist.");
   assert.deepEqual(agent.docs, ["docs/workstreams/market/"]);
   assert.deepEqual(agent.skills, [".pi/skills/workstreams/market/"]);
+});
+
+test("createAgentScaffold preserves existing project settings while adding runtime subagent override", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-settings-"));
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+    packages: [".."],
+    subagents: {
+      disableThinking: true,
+      agentOverrides: {
+        existing: { model: "openai/gpt-5-mini" },
+      },
+    },
+  }, null, 2)}\n`);
+
+  await createAgentScaffold(root, "Market Research");
+
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  assert.deepEqual(settings.packages, [".."]);
+  assert.equal(settings.subagents.disableThinking, true);
+  assert.deepEqual(settings.subagents.agentOverrides.existing, { model: "openai/gpt-5-mini" });
+  assert.deepEqual(settings.subagents.agentOverrides["market-research"].tools, ["subagent"]);
+});
+
+test("createAgentScaffold preserves same-agent runtime settings while adding subagent tool", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-settings-"));
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+    subagents: {
+      agentOverrides: {
+        "market-research": {
+          model: "openai/gpt-5-mini",
+          tools: ["read"],
+        },
+      },
+    },
+  }, null, 2)}\n`);
+
+  await createAgentScaffold(root, "Market Research");
+
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  assert.equal(settings.subagents.agentOverrides["market-research"].model, "openai/gpt-5-mini");
+  assert.deepEqual(settings.subagents.agentOverrides["market-research"].tools, ["read", "subagent"]);
 });
 
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {

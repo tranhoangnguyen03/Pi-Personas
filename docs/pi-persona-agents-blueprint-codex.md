@@ -421,6 +421,28 @@ semantic fields, but it should not create a second agent registry.
 Runtime adapter fields stay out of the scaffold unless the user explicitly asks
 for an advanced override.
 
+The scaffold may still update project runtime settings when the underlying Pi
+substrate requires it. For example, `pi-subagents` only registers the
+child-safe fanout `subagent` tool for a child whose resolved runtime config
+includes builtin `subagent` in `tools`. Pi Persona should provision that through
+`.pi/settings.json`:
+
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "brand-strategist": {
+        "tools": ["subagent"]
+      }
+    }
+  }
+}
+```
+
+This is adapter-owned runtime wiring, not user-facing persona schema. The agent
+file still contains `skills`, not `tools`, and users should not have to maintain
+both.
+
 When `/persona new <name> --role generalist` creates the first generalist, it
 should write `primary: true`. When a generalist already exists, it should still
 create the new file with `primary: false` and emit an immediate warning: one
@@ -655,11 +677,18 @@ Topology:
 - `pi-intercom/contact_supervisor` is available for blocked decisions,
   structured clarification, or meaningful plan-changing updates. Routine
   consult completion returns through `pi-subagents`.
+- Child-safe fanout depends on the `pi-subagents` runtime contract: a child can
+  call `subagent` only when its resolved runtime config includes builtin
+  `subagent` in `tools`. Pi Persona should provision that in project runtime
+  settings for scaffolded personas and warn in `/persona doctor` when manually
+  created personas are missing it.
 
 One-hop consults are the default operating pattern because they are easier to
 debug and summarize. Pi Persona should discourage nested consults in prompts and
 make them visible in provenance if they occur; it should not add a permission
-system just to block them unless the underlying runtime requires a safety cap.
+system just to block them. The runtime `tools: ["subagent"]` override is not a
+Pi Persona restriction; it is the enablement required by `pi-subagents` for the
+consult mechanism to work inside a child.
 
 ---
 
@@ -794,6 +823,8 @@ reliably:
 - Exactly one primary generalist resolves for role-based routing.
 - Declared doc paths exist.
 - Declared skill paths exist and contain usable guidance, usually `skills.md`.
+- Launchable personas have the project runtime override needed for child-safe
+  consult fanout, or a legacy-compatible `tools: subagent` declaration.
 - Legacy `tools`, `consults`, and `tags` fields are reported with migration
   guidance when present.
 - Copied runtime support roles include provenance metadata.
@@ -1036,9 +1067,12 @@ is reported, and work continues.
 
 **Test 5.5 - Nested consult guidance.**
 Have a consulted agent attempt a nested consult. Pass: pi-persona discourages
-the nested consult in instructions and shows it in provenance if it happens;
-there is no separate consult permission system unless the runtime itself
-requires one.
+the nested consult in instructions and shows it in provenance if it happens.
+For scaffolded personas, `.pi/settings.json` provides the `pi-subagents`
+`tools: ["subagent"]` runtime override needed for child-safe fanout. For
+manually created personas without that override, `/persona doctor` warns with a
+specific remediation. There is no separate Pi Persona consult permission
+system.
 
 **Test 5.6 - Supervisor bridge.**
 Have a consulted agent encounter a blocking decision. Pass: it uses

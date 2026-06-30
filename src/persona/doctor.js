@@ -10,6 +10,7 @@ import {
   resolveWorkspacePath,
 } from "./agents.js";
 import { validatePersonaSchema } from "./schema.js";
+import { hasNestedConsultRuntimeOverride, readProjectSettings } from "./settings.js";
 
 export async function runDoctor(root, options = {}) {
   const project = await discoverPersonaProject(root);
@@ -23,6 +24,7 @@ export async function runDoctor(root, options = {}) {
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
   await collectSkillsIssues(project, issues);
+  await collectNestedConsultRuntimeIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
 
   const status = issues.some((issue) => issue.severity === "error")
@@ -251,6 +253,19 @@ function collectLegacyMetadataIssues(project, issues) {
         message: `${agent.relativePath}: legacy field ${field} found; ${guidance}`,
       });
     }
+  }
+}
+
+async function collectNestedConsultRuntimeIssues(project, issues) {
+  const settings = await readProjectSettings(project.root);
+  for (const agent of project.agents) {
+    if (!["generalist", "specialist"].includes(agent.role)) continue;
+    if (hasNestedConsultRuntimeOverride(settings, agent)) continue;
+    issues.push({
+      severity: "warning",
+      file: agent.relativePath,
+      message: `${agent.relativePath}: nested persona consults need project runtime override tools: subagent in .pi/settings.json; /persona new creates this automatically`,
+    });
   }
 }
 

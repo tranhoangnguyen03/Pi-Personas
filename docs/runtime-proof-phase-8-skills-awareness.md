@@ -6,7 +6,8 @@ Evidence: `/Users/davidus-tranus/.codex/attachments/1bfb017e-c1e7-42c8-8528-c786
 
 ## Verdict
 
-Status: pass with one consult caveat.
+Status: pass with one consult caveat now addressed in code, pending fresh live
+Pi re-proof.
 
 The live Pi runtime proved the new skills-awareness contract for scaffold,
 listing, doctor, direct launch, and legacy-field migration warnings. Direct
@@ -18,8 +19,31 @@ Roster consult behavior was partially proved. The requester accepted
 expected `Consulted:` provenance. However, the child reported that the native Pi
 subagent tool was unavailable inside that environment, so it verified the
 guideline skill/doc files directly rather than performing a true nested child
-consult. Treat this as evidence that roster-based consult prompting works, not
-as full proof of nested consult execution from inside a child persona.
+consult. Treat the transcript as evidence that roster-based consult prompting
+works, not as full proof of nested consult execution from inside a child
+persona.
+
+The root cause is a real `pi-subagents` runtime boundary: child sessions receive
+the child-safe `subagent` fanout tool only when the resolved agent config
+includes builtin `subagent` in `tools`. Pi Persona keeps `tools` out of
+user-facing persona files, so the adapter now provisions that capability in
+project runtime settings instead:
+
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "phase8-brand": {
+        "tools": ["subagent"]
+      }
+    }
+  }
+}
+```
+
+`/persona new` creates or preserves this `.pi/settings.json` override
+automatically. `/persona doctor` warns when a manually created persona lacks the
+runtime override or legacy-compatible `tools: subagent`.
 
 ## Goal
 
@@ -42,7 +66,7 @@ Prove the live Pi runtime matches the current Pi Persona metadata contract:
 | P8-02 | Does `/persona-list` show docs and skills? | List showed three personas. `phase8-brand` and `phase8-guideline` showed their docs and skills paths; `phase8-generalist` showed `docs: none` and `skills: none`. | PASS |
 | P8-03 | Does `/persona doctor` pass with skills-aware agents? | Doctor reported `Status: pass`, `Agents: 3 launchable`, `Primary generalist: phase8-generalist`, baseline `.pi/agents/_baseline.md`, and `Issues - none`. | PASS |
 | P8-04 | Does direct launch receive shared and specialist skill markers? | `/phase8-brand` run `7f713496` completed. Summary included `PHASE8_DIRECT_SKILLS_AWARENESS_OK`, `PHASE8_SHARED_SKILL_OK: yes`, and `PHASE8_BRAND_SKILL_OK: yes`. | PASS |
-| P8-05 | Does roster consult work without `consults` metadata? | `/phase8-brand` run `a7e13fcf` returned `PHASE8_ROSTER_CONSULT_OK`, reported `PHASE8_GUIDELINE_SKILL_OK received: yes`, and included `Consulted: phase8-guideline`. The child also reported the native Pi subagent tool was unavailable and verified guideline files directly. | PASS WITH CAVEAT |
+| P8-05 | Does roster consult work without `consults` metadata? | `/phase8-brand` run `a7e13fcf` returned `PHASE8_ROSTER_CONSULT_OK`, reported `PHASE8_GUIDELINE_SKILL_OK received: yes`, and included `Consulted: phase8-guideline`. The child also reported the native Pi subagent tool was unavailable and verified guideline files directly. | PASS WITH CAVEAT, CODE FIX ADDED |
 | P8-06 | Does doctor report legacy metadata as migration warnings? | After creating `phase8-legacy`, doctor reported `Status: warning`, `Agents: 4 launchable`, and warnings for legacy `tools`, `consults`, and `tags`. | PASS |
 
 ## Key Transcript Evidence
@@ -151,14 +175,36 @@ Issues
 - WARNING: .pi/agents/phase8-legacy.md: legacy field tags found; prefer high-signal descriptions
 ```
 
-## Follow-up
+## Runtime Gap Resolution
 
-- Investigate why the native Pi subagent tool was unavailable inside the
-  `phase8-brand` child during the roster consult proof. The code path allows
-  roster-based consults, but this specific manual run did not prove true nested
-  subagent execution from inside a child persona.
-- Future proof should explicitly inspect the generated child task or session
-  JSONL to confirm concrete reads include:
+- `src/persona/settings.js` owns Pi Persona's project runtime settings adapter.
+- `createAgentScaffold()` keeps generated agent files clean and writes
+  `subagents.agentOverrides.<agent>.tools: ["subagent"]` in `.pi/settings.json`.
+- The settings writer preserves existing settings and existing same-agent
+  override fields while adding the `subagent` builtin.
+- `/persona doctor` warns when a launchable generalist or specialist lacks
+  nested-consult runtime provisioning.
+- Legacy `tools: subagent` is still accepted as runtime provisioning for
+  compatibility, but doctor continues to warn that `tools` is legacy
+  user-facing metadata.
+
+This is intentionally not a restriction model. The override exists because
+`pi-subagents` only registers child-safe fanout when a child agent's resolved
+runtime config includes builtin `subagent`.
+
+## Remaining Live Proof
+
+A fresh live Pi run should verify the runtime override in the actual child
+session:
+
+- Create new proof personas with `/persona new` so `.pi/settings.json` is
+  provisioned automatically.
+- Run `/persona doctor`; pass means no nested-consult provisioning warnings.
+- Direct-launch the requester and ask it to consult a peer by roster name.
+- Confirm the requester actually calls the child-safe `subagent` tool instead
+  of reading the consultant files directly.
+- Inspect the generated child task or session JSONL to confirm concrete reads
+  include:
   - `.pi/skills/shared/skills.md`
   - `.pi/skills/workstreams/phase8-brand/skills.md`
   - `docs/shared/phase8/context.md`
