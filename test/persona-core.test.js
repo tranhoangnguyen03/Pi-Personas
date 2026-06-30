@@ -38,7 +38,7 @@ async function createWorkspace() {
 
   await writeText(path.join(root, ".pi/agents/_baseline.md"), `---
 docs: docs/shared/
-tools: read
+skills: .pi/skills/shared/
 ---
 Shared operating context.
 `);
@@ -48,10 +48,6 @@ name: generalist
 role: generalist
 primary: true
 description: Routes to specialists.
-tools: read, subagent
-docs: docs/shared/
-consults: all
-tags: general, routing
 ---
 Generalist prompt.
 `);
@@ -60,10 +56,8 @@ Generalist prompt.
 name: brand
 role: specialist
 description: Brand strategy specialist.
-tools: read, subagent
 docs: docs/workstreams/brand/
-consults: guideline
-tags: brand, voice
+skills: .pi/skills/workstreams/brand/
 ---
 Brand prompt.
 `);
@@ -72,10 +66,8 @@ Brand prompt.
 name: guideline
 role: specialist
 description: Guideline reviewer.
-tools: read
 docs: docs/workstreams/guideline/
-consults:
-tags: guideline
+skills: .pi/skills/workstreams/guideline/
 ---
 Guideline prompt.
 `);
@@ -83,6 +75,9 @@ Guideline prompt.
   await writeText(path.join(root, "docs/shared/company.md"), "Shared doc\n");
   await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand doc\n");
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline doc\n");
+  await writeText(path.join(root, ".pi/skills/shared/skills.md"), "Shared skill guidance\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/brand/skills.md"), "Brand skill guidance\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/guideline/skills.md"), "Guideline skill guidance\n");
 
   return root;
 }
@@ -208,16 +203,15 @@ test("discovers launchable project agents and keeps baseline as control file", a
   assert.equal(project.agents.find((agent) => agent.name === "brand").role, "specialist");
 });
 
-test("doctor validates dependencies, docs, duplicate names, generalist count, consults, and tools", async () => {
+test("doctor validates dependencies, docs, skills, duplicate names, and generalist count", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/duplicate.md"), `---
 name: brand
 role: specialist
 description: Duplicate brand name.
-tools: fake_tool
 docs: docs/missing/
-consults: missing-peer
+skills: .pi/skills/missing/
 ---
 Duplicate prompt.
 `);
@@ -227,9 +221,7 @@ name: second-generalist
 role: generalist
 primary: true
 description: Extra generalist.
-tools: read
 docs: docs/shared/
-consults: all
 ---
 Second generalist prompt.
 `);
@@ -237,7 +229,6 @@ Second generalist prompt.
   await writeText(path.join(root, ".pi/agents/_bad-control.md"), `---
 name: bad-control
 description: This control file is accidentally launchable.
-tools: read
 ---
 Bad control prompt.
 `);
@@ -255,8 +246,7 @@ Bad control prompt.
   assert.ok(messages.some((message) => message.includes("multiple primary generalist agents")));
   assert.ok(messages.some((message) => message.includes("Set exactly one generalist to primary: true")));
   assert.ok(messages.some((message) => message.includes("docs path does not exist: docs/missing/")));
-  assert.ok(messages.some((message) => message.includes("consults unknown agent 'missing-peer'")));
-  assert.ok(messages.some((message) => message.includes("unknown tool 'fake_tool'")));
+  assert.ok(messages.some((message) => message.includes("skills path does not exist: .pi/skills/missing/")));
   assert.ok(messages.some((message) => message.includes("control file is launchable")));
 });
 
@@ -277,19 +267,18 @@ test("agent scaffold marks first generalist primary and later generalists non-pr
   assert.match(formatAgentScaffoldCreatedMessage(second), /backup-generalist/);
 });
 
-test("doctor recognizes persona_consult as a Pi Persona runtime tool", async () => {
+test("doctor reports legacy tools consults and tags as migration warnings", async () => {
   const root = await createWorkspace();
 
-  await writeText(path.join(root, ".pi/agents/brand.md"), `---
-name: brand
+  await writeText(path.join(root, ".pi/agents/legacy.md"), `---
+name: legacy
 role: specialist
-description: Brand strategy specialist.
+description: Legacy metadata specialist.
 tools: read, subagent, persona_consult
-docs: docs/workstreams/brand/
 consults: guideline
 tags: brand, voice
 ---
-Brand prompt.
+Legacy prompt.
 `);
 
   const result = await runDoctor(root, {
@@ -299,23 +288,25 @@ Brand prompt.
     },
   });
 
-  assert.equal(result.issues.some((issue) => issue.message.includes("persona_consult")), false);
+  assert.equal(result.status, "warning");
+  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tools found; migrate tool-use guidance to skills")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field consults found; route by agent descriptions instead")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tags found; prefer high-signal descriptions")));
 });
 
-test("doctor requires subagent tool for agents with consult peers", async () => {
+test("doctor validates skill paths and skills.md breadcrumbs", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/brand.md"), `---
 name: brand
 role: specialist
 description: Brand strategy specialist.
-tools: read
 docs: docs/workstreams/brand/
-consults: guideline
-tags: brand, voice
+skills: .pi/skills/workstreams/empty/
 ---
 Brand prompt.
 `);
+  await mkdir(path.join(root, ".pi/skills/workstreams/empty/"), { recursive: true });
 
   const result = await runDoctor(root, {
     dependencyStatus: {
@@ -324,11 +315,11 @@ Brand prompt.
     },
   });
 
-  assert.equal(result.status, "error");
-  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: consult-capable agents must list tool 'subagent'")));
+  assert.equal(result.status, "warning");
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: .pi/skills/workstreams/empty/ exists but no skills.md was found")));
 });
 
-test("resolver preview merges baseline and agent scope while deriving runtime fields", async () => {
+test("resolver preview merges baseline and agent awareness while deriving runtime fields", async () => {
   const root = await createWorkspace();
 
   const preview = await resolveAgentPreview(root, "brand");
@@ -337,14 +328,18 @@ test("resolver preview merges baseline and agent scope while deriving runtime fi
     "docs/shared/",
     "docs/workstreams/brand/",
   ]);
-  assert.deepEqual(preview.tools, [
-    "read",
-    "subagent",
+  assert.deepEqual(preview.skills, [
+    ".pi/skills/shared/",
+    ".pi/skills/workstreams/brand/",
   ]);
-  assert.deepEqual(preview.consults, [
+  assert.deepEqual(preview.agentRoster.map((agent) => agent.name), [
+    "brand",
+    "generalist",
     "guideline",
   ]);
   assert.deepEqual(preview.derived.defaultReads, [
+    ".pi/skills/shared/skills.md",
+    ".pi/skills/workstreams/brand/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/brand/brief.md",
   ]);
@@ -363,6 +358,8 @@ test("resolver expands directory docs into concrete runtime reads while preservi
     "docs/workstreams/brand/",
   ]);
   assert.deepEqual(scope.derived.defaultReads, [
+    ".pi/skills/shared/skills.md",
+    ".pi/skills/workstreams/brand/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/brand/brief.md",
     "docs/workstreams/brand/examples/example.md",
@@ -406,7 +403,6 @@ test("doctor reports schema errors without relying on pi-subagents failure", asy
   await writeText(path.join(root, ".pi/agents/missing-description.md"), `---
 name: missing-description
 role: specialist
-tools: read
 docs: docs/shared/
 ---
 Missing description prompt.
@@ -416,28 +412,15 @@ Missing description prompt.
 name: unknown-role
 role: executive
 description: Invalid role.
-tools: read
 docs: docs/shared/
 ---
 Unknown role prompt.
-`);
-
-  await writeText(path.join(root, ".pi/agents/specialist-all.md"), `---
-name: specialist-all
-role: specialist
-description: Specialist with invalid all consult.
-tools: read
-docs: docs/shared/
-consults: all
----
-Specialist all prompt.
 `);
 
   await writeText(path.join(root, ".pi/agents/runtime-leak.md"), `---
 name: runtime-leak
 role: specialist
 description: Agent with runtime-only fields.
-tools: read
 docs: docs/shared/
 defaultReads: docs/shared/
 systemPromptMode: replace
@@ -451,7 +434,6 @@ name: specialist-primary
 role: specialist
 primary: true
 description: Specialist with invalid primary flag.
-tools: read
 docs: docs/shared/
 ---
 Specialist primary prompt.
@@ -462,7 +444,6 @@ name: string-primary
 role: generalist
 primary: "true"
 description: Generalist with invalid primary value.
-tools: read
 docs: docs/shared/
 ---
 String primary prompt.
@@ -479,7 +460,6 @@ String primary prompt.
   assert.equal(result.status, "error");
   assert.ok(messages.some((message) => message.includes("missing required field 'description'")));
   assert.ok(messages.some((message) => message.includes("unknown role 'executive'")));
-  assert.ok(messages.some((message) => message.includes("specialist cannot use consults: all")));
   assert.ok(messages.some((message) => message.includes("runtime-only field 'defaultReads'")));
   assert.ok(messages.some((message) => message.includes("runtime-only field 'systemPromptMode'")));
   assert.ok(messages.some((message) => message.includes("runtime-only field 'inheritSkills'")));
@@ -494,7 +474,6 @@ test("doctor requires exactly one generalist", async () => {
 name: brand
 role: specialist
 description: Brand strategy specialist.
-tools: read
 docs: docs/brand/
 ---
 Brand prompt.
@@ -521,9 +500,6 @@ name: backup-generalist
 role: generalist
 primary: false
 description: Backup generalist.
-tools: read, subagent
-docs: docs/shared/
-consults: all
 ---
 Backup generalist prompt.
 `);
@@ -549,9 +525,6 @@ name: backup-generalist
 role: generalist
 primary: true
 description: Backup generalist.
-tools: read, subagent
-docs: docs/shared/
-consults: all
 ---
 Backup generalist prompt.
 `);
@@ -580,7 +553,6 @@ package: runtime
 origin: pi-subagents builtin worker
 role: runtime
 description: Runtime worker.
-tools: read
 docs: docs/shared/
 ---
 Worker prompt.
@@ -606,7 +578,6 @@ test("doctor rejects docs paths that escape the workspace", async () => {
 name: escape
 role: specialist
 description: Escaping docs specialist.
-tools: read
 docs: ../../
 ---
 Escape prompt.
@@ -633,6 +604,9 @@ tools:
 docs:
   - docs/shared/
   - docs/workstreams/brand/
+skills:
+  - .pi/skills/shared/
+  - .pi/skills/workstreams/brand/
 consults: [guideline, launch]
 tags:
   - brand
@@ -644,6 +618,7 @@ Prompt body.
   assert.equal(parsed.frontmatter.description, "Handles values with: colons");
   assert.deepEqual(parsed.frontmatter.tools, ["read", "write"]);
   assert.deepEqual(parsed.frontmatter.docs, ["docs/shared/", "docs/workstreams/brand/"]);
+  assert.deepEqual(parsed.frontmatter.skills, [".pi/skills/shared/", ".pi/skills/workstreams/brand/"]);
   assert.deepEqual(parsed.frontmatter.consults, ["guideline", "launch"]);
   assert.deepEqual(parsed.frontmatter.tags, ["brand"]);
 });
@@ -655,15 +630,14 @@ test("resolveAgentScope merges baseline and selected agent only", async () => {
 name: operator
 role: specialist
 description: Operations specialist.
-tools: write
 docs: docs/workstreams/operator/
-consults: brand
-tags: operations
+skills: .pi/skills/workstreams/operator/
 ---
 Operator prompt.
 `);
 
   await writeText(path.join(root, "docs/workstreams/operator/runbook.md"), "Operator doc\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/operator/skills.md"), "Operator skill\n");
 
   const scope = await resolveAgentScope(root, "operator");
 
@@ -673,22 +647,25 @@ Operator prompt.
     "docs/shared/",
     "docs/workstreams/operator/",
   ]);
-  assert.deepEqual(scope.tools, [
-    "read",
-    "write",
-  ]);
-  assert.deepEqual(scope.consults, [
-    "brand",
+  assert.deepEqual(scope.skills, [
+    ".pi/skills/shared/",
+    ".pi/skills/workstreams/operator/",
   ]);
   assert.deepEqual(scope.derived.defaultReads, [
+    ".pi/skills/shared/skills.md",
+    ".pi/skills/workstreams/operator/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/operator/runbook.md",
   ]);
   assert.match(scope.prompt, /Shared operating context/);
+  assert.match(scope.prompt, /## Agent Roster/);
+  assert.match(scope.prompt, /brand - specialist: Brand strategy specialist\./);
   assert.match(scope.prompt, /Operator prompt/);
   assert.doesNotMatch(scope.prompt, /Brand prompt/);
   assert.ok(!scope.docs.includes("docs/workstreams/brand/"));
   assert.ok(!scope.docs.includes("docs/workstreams/guideline/"));
+  assert.ok(!scope.skills.includes(".pi/skills/workstreams/brand/"));
+  assert.ok(!scope.skills.includes(".pi/skills/workstreams/guideline/"));
 });
 
 test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", async () => {
@@ -705,8 +682,7 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
     "docs/shared/",
     "docs/workstreams/brand/",
   ]);
-  assert.deepEqual(launch.tools, ["read", "subagent"]);
-  assert.deepEqual(launch.consults, ["guideline"]);
+  assert.deepEqual(launch.skills, [".pi/skills/shared/", ".pi/skills/workstreams/brand/"]);
   assert.deepEqual(launch.subagentParams, {
     agent: "brand",
     task: launch.subagentParams.task,
@@ -714,29 +690,35 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
     agentScope: "both",
     context: "fresh",
     reads: [
+      ".pi/skills/shared/skills.md",
+      ".pi/skills/workstreams/brand/skills.md",
       "docs/shared/company.md",
       "docs/workstreams/brand/brief.md",
     ],
   });
-  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
+  assert.match(launch.subagentParams.task, /^\[Read from: \.pi\/skills\/shared\/skills\.md, \.pi\/skills\/workstreams\/brand\/skills\.md, docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
   assert.match(launch.subagentParams.task, /Resolved doc files:\n- docs\/shared\/: docs\/shared\/company\.md\n- docs\/workstreams\/brand\/: docs\/workstreams\/brand\/brief\.md/);
+  assert.match(launch.subagentParams.task, /Resolved skill files:\n- \.pi\/skills\/shared\/: \.pi\/skills\/shared\/skills\.md\n- \.pi\/skills\/workstreams\/brand\/: \.pi\/skills\/workstreams\/brand\/skills\.md/);
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
   assert.match(launch.subagentParams.task, /Tool: subagent/);
-  assert.match(launch.subagentParams.task, /Call the `subagent` tool with `agent` set to an allowed consultant/);
+  assert.match(launch.subagentParams.task, /Consult known personas from the roster when specialist expertise is useful/);
   assert.match(launch.subagentParams.task, /requester: brand/);
-  assert.match(launch.subagentParams.task, /Default consult context: fresh/);
+  assert.match(launch.subagentParams.task, /Known personas:/);
+  assert.match(launch.subagentParams.task, /guideline - specialist: Guideline reviewer\./);
   assert.doesNotMatch(launch.subagentParams.task, /Tool: persona_consult/);
   assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
 });
 
-test("buildAgentLaunchRequest omits consult tool guidance when no consult peers exist", async () => {
+test("buildAgentLaunchRequest includes roster consult guidance without allowlists", async () => {
   const root = await createWorkspace();
   const scope = await resolveAgentScope(root, "guideline");
 
   const request = buildAgentLaunchRequest(scope, { task: "Answer directly." });
 
-  assert.doesNotMatch(request.subagentParams.task, /Tool: subagent/);
+  assert.match(request.subagentParams.task, /Known personas:/);
+  assert.match(request.subagentParams.task, /brand - specialist: Brand strategy specialist\./);
+  assert.doesNotMatch(request.subagentParams.task, /Allowed consultants:/);
 });
 
 test("resolveAgentLaunchRequest refuses duplicate agent names instead of choosing one", async () => {
@@ -746,10 +728,8 @@ test("resolveAgentLaunchRequest refuses duplicate agent names instead of choosin
 name: brand
 role: specialist
 description: Duplicate brand strategy specialist.
-tools: read
 docs: docs/workstreams/brand/
-consults:
-tags: brand
+skills: .pi/skills/workstreams/brand/
 ---
 Duplicate brand prompt.
 `);
@@ -776,32 +756,34 @@ test("resolveConsultLaunchRequest builds summarized fresh consultant scope by de
   assert.equal(consult.consultant.name, "guideline");
   assert.equal(consult.context, "fresh");
   assert.deepEqual(consult.docs, ["docs/shared/", "docs/workstreams/guideline/"]);
-  assert.deepEqual(consult.tools, ["read"]);
-  assert.deepEqual(consult.consults, []);
+  assert.deepEqual(consult.skills, [".pi/skills/shared/", ".pi/skills/workstreams/guideline/"]);
   assert.equal(consult.subagentParams.agent, "guideline");
   assert.equal(consult.subagentParams.context, "fresh");
   assert.deepEqual(consult.subagentParams.reads, [
+    ".pi/skills/shared/skills.md",
+    ".pi/skills/workstreams/guideline/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/guideline/rules.md",
   ]);
-  assert.match(consult.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
+  assert.match(consult.subagentParams.task, /^\[Read from: \.pi\/skills\/shared\/skills\.md, \.pi\/skills\/workstreams\/guideline\/skills\.md, docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
   assert.match(consult.subagentParams.task, /consultant: guideline/);
   assert.match(consult.subagentParams.task, /summary: The requester is revising launch copy/);
   assert.doesNotMatch(consult.subagentParams.task, /Brand prompt/);
 });
 
-test("resolveConsultLaunchRequest rejects peers not allowed by requester consults", async () => {
+test("resolveConsultLaunchRequest allows consulting any known persona by roster", async () => {
   const root = await createWorkspace();
 
-  await assert.rejects(
-    () => resolveConsultLaunchRequest(root, {
-      requester: "guideline",
-      consultant: "brand",
-      question: "Can I ask brand?",
-      summary: "Guideline wants an unlisted peer.",
-    }),
-    /guideline cannot consult brand/,
-  );
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "guideline",
+    consultant: "brand",
+    question: "Can I ask brand?",
+    summary: "Guideline wants a brand perspective.",
+  });
+
+  assert.equal(consult.requester.name, "guideline");
+  assert.equal(consult.consultant.name, "brand");
+  assert.equal(consult.subagentParams.agent, "brand");
 });
 
 test("resolveConsultLaunchRequest refuses duplicate requester or consultant names", async () => {
@@ -811,10 +793,8 @@ test("resolveConsultLaunchRequest refuses duplicate requester or consultant name
 name: guideline
 role: specialist
 description: Duplicate guideline reviewer.
-tools: read
 docs: docs/workstreams/guideline/
-consults:
-tags: guideline
+skills: .pi/skills/workstreams/guideline/
 ---
 Duplicate guideline prompt.
 `);
@@ -896,11 +876,11 @@ test("formatPersonaList shows read-only discovery details", async () => {
   assert.match(output, /# Pi Personas/);
   assert.match(output, /generalist - generalist \(primary\)/);
   assert.match(output, /Routes to specialists\./);
-  assert.match(output, /docs: docs\/shared\//);
-  assert.match(output, /consults: all/);
+  assert.match(output, /docs: none/);
+  assert.match(output, /skills: none/);
   assert.match(output, /brand - specialist/);
   assert.match(output, /docs: docs\/workstreams\/brand\//);
-  assert.match(output, /consults: guideline/);
+  assert.match(output, /skills: \.pi\/skills\/workstreams\/brand\//);
   assert.doesNotMatch(output, /launch/i);
 });
 
@@ -912,14 +892,13 @@ name: pricing
 role: specialist
 description: Pricing strategy specialist.
 model: openai/gpt-5
-tools: read
 docs: docs/workstreams/pricing/
-consults:
-tags: pricing, revenue
+skills: .pi/skills/workstreams/pricing/
 ---
 Pricing prompt.
 `);
   await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing doc\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/pricing/skills.md"), "Pricing skill\n");
 
   const roundtable = await resolveRoundtableLaunchRequest(root, {
     query: "Should brand positioning change pricing and guideline language?",
@@ -938,12 +917,12 @@ Pricing prompt.
   assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
   const pricingRoundOne = roundtable.subagentParams.chain[0].parallel.find((step) => step.agent === "pricing");
   const brandRoundTwo = roundtable.subagentParams.chain[1].parallel.find((step) => step.agent === "brand");
-  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
+  assert.deepEqual(pricingRoundOne.reads, [".pi/skills/shared/skills.md", ".pi/skills/workstreams/pricing/skills.md", "docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
   assert.equal(pricingRoundOne.model, "openai/gpt-5");
-  assert.deepEqual(brandRoundTwo.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
-  assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/company.md"]);
+  assert.deepEqual(brandRoundTwo.reads, [".pi/skills/shared/skills.md", ".pi/skills/workstreams/brand/skills.md", "docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
+  assert.deepEqual(roundtable.subagentParams.chain[2].reads, [".pi/skills/shared/skills.md", "docs/shared/company.md"]);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
-  assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Do not call persona_consult or subagent/);
+  assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Stay inside this round-table unless you are blocked/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /\{previous\}/);
   assert.match(roundtable.subagentParams.chain[2].task, /Moderator Synthesis/);
@@ -957,10 +936,8 @@ test("resolveRoundtableLaunchRequest refuses duplicate agent names before buildi
 name: brand
 role: specialist
 description: Duplicate brand strategy specialist.
-tools: read
 docs: docs/workstreams/brand/
-consults:
-tags: brand
+skills: .pi/skills/workstreams/brand/
 ---
 Duplicate brand prompt.
 `);
@@ -981,10 +958,8 @@ test("resolveRoundtableLaunchRequest caps the roster at five specialists", async
 name: ${name}
 role: specialist
 description: ${name} specialist for market planning.
-tools: read
 docs: docs/shared/
-consults:
-tags: market, planning, ${name}
+skills: .pi/skills/shared/
 ---
 ${name} prompt.
 `);
@@ -1005,10 +980,7 @@ test("resolveRoundtableLaunchRequest excludes unrelated zero-score specialists w
 name: unrelated
 role: specialist
 description: Unrelated proof specialist.
-tools: read
 docs:
-consults:
-tags: unrelated
 ---
 Unrelated prompt.
 `);
@@ -1171,30 +1143,26 @@ test("runSubagentBridgeRequest accepts delayed bridge start and response", async
 
 test("parsePersonaNewArgs accepts setup metadata options", () => {
   const parsed = parsePersonaNewArgs(
-    'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --tools read,subagent --consults guideline,pricing --tags market,research',
+    'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --skills .pi/skills/workstreams/market/',
   );
 
   assert.equal(parsed.rawName, "Market Research");
   assert.equal(parsed.options.role, "specialist");
   assert.equal(parsed.options.description, "Market research specialist.");
   assert.deepEqual(parsed.options.docs, ["docs/workstreams/market/"]);
-  assert.deepEqual(parsed.options.tools, ["read", "subagent"]);
-  assert.deepEqual(parsed.options.consults, ["guideline", "pricing"]);
-  assert.deepEqual(parsed.options.tags, ["market", "research"]);
+  assert.deepEqual(parsed.options.skills, [".pi/skills/workstreams/market/"]);
 });
 
 test("parsePersonaNewArgs accepts equals options and rejects unsafe input", () => {
   const parsed = parsePersonaNewArgs(
-    'Ops Lead --role=generalist --description="Routes operational requests." --docs=docs/shared/,docs/workstreams/ops/ --tools=read --consults=all --tags=ops',
+    'Ops Lead --role=generalist --description="Routes operational requests." --docs=docs/shared/,docs/workstreams/ops/ --skills=.pi/skills/shared/,.pi/skills/workstreams/ops/',
   );
 
   assert.equal(parsed.rawName, "Ops Lead");
   assert.equal(parsed.options.role, "generalist");
   assert.equal(parsed.options.description, "Routes operational requests.");
   assert.deepEqual(parsed.options.docs, ["docs/shared/", "docs/workstreams/ops/"]);
-  assert.deepEqual(parsed.options.tools, ["read"]);
-  assert.deepEqual(parsed.options.consults, ["all"]);
-  assert.deepEqual(parsed.options.tags, ["ops"]);
+  assert.deepEqual(parsed.options.skills, [".pi/skills/shared/", ".pi/skills/workstreams/ops/"]);
 
   assert.throws(
     () => parsePersonaNewArgs("Ops Lead --role runtime"),
@@ -1203,6 +1171,10 @@ test("parsePersonaNewArgs accepts equals options and rejects unsafe input", () =
   assert.throws(
     () => parsePersonaNewArgs("Ops Lead --unknown value"),
     /unknown \/persona new option: --unknown/,
+  );
+  assert.throws(
+    () => parsePersonaNewArgs("Ops Lead --consults all"),
+    /unknown \/persona new option: --consults/,
   );
   assert.throws(
     () => parsePersonaNewArgs("--role specialist"),
@@ -1221,11 +1193,11 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
   assert.match(content, /^---\nname: market-researcher\n/m);
   assert.match(content, /role: specialist/);
   assert.match(content, /description: Market Researcher specialist\./);
-  assert.match(content, /tools:\n/);
-  assert.doesNotMatch(content, /tools: read/);
   assert.match(content, /docs:\n/);
-  assert.match(content, /consults:\n/);
-  assert.match(content, /tags:\n/);
+  assert.match(content, /skills:\n/);
+  assert.doesNotMatch(content, /tools:/);
+  assert.doesNotMatch(content, /consults:/);
+  assert.doesNotMatch(content, /tags:/);
   assert.match(content, /You are market-researcher\./);
   assert.doesNotMatch(content, /defaultReads/);
   assert.doesNotMatch(content, /systemPromptMode/);
@@ -1243,18 +1215,17 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
     role: "specialist",
     description: "Market research specialist.",
     docs: ["docs/workstreams/market/"],
-    tools: ["read", "subagent"],
-    consults: ["guideline"],
-    tags: ["market", "research"],
+    skills: [".pi/skills/workstreams/market/"],
   });
   const content = await readFile(result.filePath, "utf8");
 
   assert.match(content, /role: specialist/);
   assert.match(content, /description: Market research specialist\./);
-  assert.match(content, /tools: read, subagent/);
   assert.match(content, /docs: docs\/workstreams\/market\//);
-  assert.match(content, /consults: guideline/);
-  assert.match(content, /tags: market, research/);
+  assert.match(content, /skills: \.pi\/skills\/workstreams\/market\//);
+  assert.doesNotMatch(content, /tools:/);
+  assert.doesNotMatch(content, /consults:/);
+  assert.doesNotMatch(content, /tags:/);
   assert.doesNotMatch(content, /defaultReads/);
   assert.doesNotMatch(content, /systemPromptMode/);
   assert.doesNotMatch(content, /inheritSkills/);
@@ -1263,8 +1234,7 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
   const agent = project.agents.find((candidate) => candidate.name === "market-research");
   assert.equal(agent.description, "Market research specialist.");
   assert.deepEqual(agent.docs, ["docs/workstreams/market/"]);
-  assert.deepEqual(agent.tools, ["read", "subagent"]);
-  assert.deepEqual(agent.consults, ["guideline"]);
+  assert.deepEqual(agent.skills, [".pi/skills/workstreams/market/"]);
 });
 
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
@@ -1272,7 +1242,7 @@ test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
 
   const result = await createAgentScaffold(root, "Market Research", {
     docs: ["docs/workstreams/market/"],
-    tools: ["read"],
+    skills: [".pi/skills/workstreams/market/"],
   });
 
   assert.equal(formatAgentScaffoldCreatedMessage(result), [
@@ -1280,7 +1250,7 @@ test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
     "",
     "Launch: /market-research",
     "Docs: docs/workstreams/market/",
-    "Tools: read",
+    "Skills: .pi/skills/workstreams/market/",
     "Next: run /persona doctor",
   ].join("\n"));
 });
@@ -1307,7 +1277,7 @@ test("phase 7 full workflow composes setup docs doctor launch consult roundtable
 
   await writeText(path.join(root, ".pi/agents/_baseline.md"), `---
 docs: docs/shared/
-tools: read
+skills: .pi/skills/shared/
 ---
 Shared pilot context.
 `);
@@ -1315,27 +1285,24 @@ Shared pilot context.
   await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand pilot doc\n");
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline pilot doc\n");
   await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing pilot doc\n");
+  await writeText(path.join(root, ".pi/skills/shared/skills.md"), "Shared pilot skill\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/brand/skills.md"), "Brand pilot skill\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/guideline/skills.md"), "Guideline pilot skill\n");
+  await writeText(path.join(root, ".pi/skills/workstreams/pricing/skills.md"), "Pricing pilot skill\n");
 
   await createAgentScaffold(root, "generalist", {
     role: "generalist",
     description: "Routes pilot requests.",
-    docs: ["docs/shared/"],
-    tools: ["read", "subagent"],
-    consults: ["all"],
-    tags: ["general", "routing"],
   });
   await createAgentScaffold(root, "brand", {
     description: "Brand pilot specialist.",
     docs: ["docs/workstreams/brand/"],
-    tools: ["read", "subagent"],
-    consults: ["guideline"],
-    tags: ["brand"],
+    skills: [".pi/skills/workstreams/brand/"],
   });
   await createAgentScaffold(root, "guideline", {
     description: "Guideline pilot reviewer.",
     docs: ["docs/workstreams/guideline/"],
-    tools: ["read"],
-    tags: ["guideline"],
+    skills: [".pi/skills/workstreams/guideline/"],
   });
 
   const doctor = await runDoctor(root, {
@@ -1351,7 +1318,7 @@ Shared pilot context.
   assert.match(list, /generalist - generalist \(primary\)/);
   assert.match(list, /brand - specialist/);
   assert.match(list, /docs: docs\/workstreams\/brand\//);
-  assert.match(list, /consults: guideline/);
+  assert.match(list, /skills: \.pi\/skills\/workstreams\/brand\//);
   assert.doesNotMatch(list, /launch/i);
 
   const directLaunch = await resolveAgentLaunchRequest(root, "brand", {
@@ -1360,6 +1327,7 @@ Shared pilot context.
   assert.equal(directLaunch.subagentParams.agent, "brand");
   assert.equal(directLaunch.subagentParams.context, "fresh");
   assert.match(directLaunch.subagentParams.task, /Tool: subagent/);
+  assert.match(directLaunch.subagentParams.task, /Known personas:/);
 
   const consult = await resolveConsultLaunchRequest(root, {
     requester: "brand",
@@ -1381,8 +1349,7 @@ Shared pilot context.
   await createAgentScaffold(root, "pricing", {
     description: "Pricing pilot specialist.",
     docs: ["docs/workstreams/pricing/"],
-    tools: ["read"],
-    tags: ["pricing"],
+    skills: [".pi/skills/workstreams/pricing/"],
   });
 
   const expandedProject = await discoverPersonaProject(root);
@@ -1393,9 +1360,6 @@ Shared pilot context.
   await createAgentScaffold(root, "backup-generalist", {
     role: "generalist",
     description: "Second pilot generalist.",
-    docs: ["docs/shared/"],
-    tools: ["read"],
-    tags: ["general"],
   });
 
   const duplicateDoctor = await runDoctor(root, {

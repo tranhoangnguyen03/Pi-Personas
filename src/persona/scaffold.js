@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { discoverPersonaProject } from "./agents.js";
 
-const ALLOWED_OPTIONS = new Set(["role", "description", "tools", "docs", "consults", "tags"]);
-const LIST_OPTIONS = new Set(["tools", "docs", "consults", "tags"]);
+const ALLOWED_OPTIONS = new Set(["role", "description", "docs", "skills"]);
+const LIST_OPTIONS = new Set(["docs", "skills"]);
 const VALID_ROLES = new Set(["generalist", "specialist"]);
 
 export function normalizeAgentName(input) {
@@ -29,25 +29,20 @@ export function renderAgentScaffold(agentName, options = {}) {
   const primaryLine = role === "generalist" && typeof options.primary === "boolean"
     ? `primary: ${options.primary}\n`
     : "";
-  const tools = normalizeList(options.tools).join(", ");
   const docs = normalizeList(options.docs).join(", ");
-  const consults = normalizeList(options.consults).join(", ");
-  const tags = normalizeList(options.tags).join(", ");
+  const skills = normalizeList(options.skills).join(", ");
 
   return `---
 name: ${agentName}
 role: ${role}
 ${primaryLine}description: ${description}
-tools:${tools ? ` ${tools}` : ""}
 docs:${docs ? ` ${docs}` : ""}
-consults:${consults ? ` ${consults}` : ""}
-tags:${tags ? ` ${tags}` : ""}
+skills:${skills ? ` ${skills}` : ""}
 ---
 You are ${agentName}.
 
-Help with requests that match your role. Use only the docs, tools, and consult
-permissions declared in this agent file plus the shared baseline assembled by
-Pi Persona.
+Help with requests that match your role. Use the shared baseline plus any docs
+and skills declared in this agent file as your main operating breadcrumbs.
 `;
 }
 
@@ -136,10 +131,8 @@ export async function createAgentScaffold(root, rawName, options = {}) {
       role,
       primary,
       description: normalizeDescription(options.description ?? `${titleFromName(rawName)} specialist.`),
-      tools: normalizeList(options.tools),
       docs: normalizeList(options.docs),
-      consults: normalizeList(options.consults),
-      tags: normalizeList(options.tags),
+      skills: normalizeList(options.skills),
     },
   };
 }
@@ -155,10 +148,10 @@ export function formatAgentScaffoldCreatedMessage(result) {
   } else {
     lines.push("Docs: none");
   }
-  if (result.options.tools.length > 0) {
-    lines.push(`Tools: ${result.options.tools.join(", ")}`);
+  if (result.options.skills.length > 0) {
+    lines.push(`Skills: ${result.options.skills.join(", ")}`);
   } else {
-    lines.push("Tools: none");
+    lines.push("Skills: none");
   }
   if (result.options.role === "generalist") {
     lines.push(`Primary: ${result.options.primary ? "true" : "false"}`);

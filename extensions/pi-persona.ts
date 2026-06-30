@@ -42,11 +42,11 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "persona_consult",
     label: "Persona Consult",
-    description: "Prepare and validate an allowed Pi Persona peer consult request. Execute the returned request with the child-safe pi-subagents subagent tool.",
+    description: "Prepare a Pi Persona peer consult request for a known persona. Execute the returned request with the child-safe pi-subagents subagent tool.",
     promptSnippet: "Use persona_consult only when you need Pi Persona to validate and prepare a consult envelope. Then call the subagent tool with the returned request.",
     parameters: Type.Object({
       requester: Type.String({ description: "Active Pi Persona requester agent name" }),
-      consultant: Type.String({ description: "Allowed Pi Persona consultant agent name" }),
+      consultant: Type.String({ description: "Known Pi Persona consultant agent name" }),
       question: Type.String({ description: "Specific question for the consultant" }),
       summary: Type.String({ description: "Requester-authored concise context summary" }),
       constraints: Type.Optional(Type.String({ description: "Constraints the consultant must follow" })),
@@ -249,7 +249,7 @@ function normalizeCommandText(value: string): string {
 function personaUsage(): string {
   return [
     "Usage: /persona doctor",
-    "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--tools tool[,tool]] [--consults peer[,peer]] [--tags tag[,tag]]",
+    "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills path[,path]]",
   ].join("\n");
 }
 

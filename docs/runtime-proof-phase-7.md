@@ -21,6 +21,11 @@ errors. The design has since been superseded by the primary-generalist rule:
 multiple generalists are allowed when exactly one launchable generalist has
 `primary: true`.
 
+The metadata shape in this export is also historical. The current design uses
+`skills` as instruction breadcrumbs and treats `tools`, `consults`, and `tags`
+as legacy migration fields. Future runtime proof should show skills in
+`/persona-list` and scaffold output instead of consult peers or tool metadata.
+
 ## Runtime Environment
 
 | Item | Evidence | Verdict |
@@ -37,7 +42,7 @@ multiple generalists are allowed when exactly one launchable generalist has
 | P7-01 | Does doctor report missing setup before fixtures exist? | Initial `/persona doctor` reported `Status: error`, `Agents: 0 launchable`, `Generalist: 0`, and `exactly one generalist required; found 0`. | PASS |
 | P7-02 | Does list show no personas before fixtures exist? | Initial `/persona-list` rendered `# Pi Personas` with `- none`. | PASS |
 | P7-03 | Does doctor pass after Phase 7 fixtures are installed? | `/persona doctor` reported `Status: pass`, `Agents: 4 launchable`, `Generalist: phase7-generalist`, baseline `.pi/agents/_baseline.md`, and no issues. | PASS |
-| P7-04 | Does `/persona-list` show role, docs, and consult peers? | List showed `phase7-brand`, `phase7-generalist`, `phase7-guideline`, and `phase7-pricing` with roles, docs paths, and consults. | PASS |
+| P7-04 | Does `/persona-list` show role, docs, and consult peers? | List showed `phase7-brand`, `phase7-generalist`, `phase7-guideline`, and `phase7-pricing` with roles, docs paths, and consults. Current design should show skills instead of consult peers. | PASS, SUPERSEDED |
 | P7-05 | Does direct launch use `pi-subagents` and nested consults? | Direct `phase7-brand` run `06968271` completed with one child and nested `phase7-guideline`; summary included `PHASE7_DIRECT_BRAND_OK`. | PASS |
 | P7-06 | Does generalist consult path work? | `phase7-generalist` run `a1cf6b8c` completed and nested `phase7-brand`; summary included `PHASE7_GENERALIST_CONSULT_BRAND_OK`. | PASS |
 | P7-07 | Does round-table launch a multi-step chain? | Round-table run `d6cd3c0e` completed as mode `chain`, `Children: 7 completed`, `Chain steps: 3`, with brand, guideline, pricing, and generalist artifacts. | PASS |
@@ -150,6 +155,8 @@ Tools: read
 Next: run /persona doctor
 ```
 
+Current scaffold output should show `Skills:` instead of `Tools:`.
+
 Historical duplicate-generalist proof:
 
 ```text
@@ -184,3 +191,7 @@ roundtable requires exactly one generalist; found 2
   change expands directory docs into concrete runtime file reads and adds a
   resolved-file manifest to child prompts without changing the user-facing
   schema.
+- Persona metadata has shifted to awareness breadcrumbs. Future manual proof
+  should verify `/persona new ... --skills <path>` scaffolds `skills:`, list
+  output shows skills, doctor reports legacy `tools`/`consults`/`tags` as
+  migration warnings, and consults can target any known persona by name.

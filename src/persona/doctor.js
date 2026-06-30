@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,20 +11,6 @@ import {
 } from "./agents.js";
 import { validatePersonaSchema } from "./schema.js";
 
-const KNOWN_TOOLS = new Set([
-  "read",
-  "bash",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-  "persona_consult",
-  "subagent",
-  "intercom",
-  "contact_supervisor",
-]);
-
 export async function runDoctor(root, options = {}) {
   const project = await discoverPersonaProject(root);
   const dependencyStatus = options.dependencyStatus ?? await detectDependencies();
@@ -36,9 +22,8 @@ export async function runDoctor(root, options = {}) {
   collectDuplicateNameIssues(project, issues);
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
-  collectConsultIssues(project, issues);
-  collectConsultRuntimeIssues(project, issues);
-  collectToolIssues(project, issues);
+  await collectSkillsIssues(project, issues);
+  collectLegacyMetadataIssues(project, issues);
 
   const status = issues.some((issue) => issue.severity === "error")
     ? "error"
@@ -205,44 +190,79 @@ async function collectDocsIssues(project, issues) {
   }
 }
 
-function collectConsultIssues(project, issues) {
-  const names = new Set(project.agents.map((agent) => agent.name));
-  for (const agent of project.agents) {
-    for (const consult of agent.consults) {
-      if (consult === "all") continue;
-      if (!names.has(consult)) {
-        issues.push({
-          severity: "error",
-          file: agent.relativePath,
-          message: `${agent.relativePath}: consults unknown agent '${consult}'`,
-        });
-      }
+async function collectSkillsIssues(project, issues) {
+  const skillEntries = [];
+  if (project.baseline) {
+    for (const skillPath of project.baseline.frontmatter.skills ?? []) {
+      skillEntries.push({ owner: project.baseline.relativePath, skillPath });
     }
   }
-}
-
-function collectConsultRuntimeIssues(project, issues) {
   for (const agent of project.agents) {
-    if (agent.consults.length === 0) continue;
-    if (agent.tools.includes("subagent")) continue;
-    issues.push({
-      severity: "error",
-      file: agent.relativePath,
-      message: `${agent.relativePath}: consult-capable agents must list tool 'subagent' so pi-subagents enables child-safe nested fanout`,
-    });
+    for (const skillPath of agent.skills) {
+      skillEntries.push({ owner: agent.relativePath, skillPath });
+    }
   }
-}
 
-function collectToolIssues(project, issues) {
-  for (const agent of project.agents) {
-    for (const tool of agent.tools) {
-      if (!KNOWN_TOOLS.has(tool)) {
+  for (const entry of skillEntries) {
+    const resolved = resolveWorkspacePath(project.root, entry.skillPath);
+    if (!resolved.ok) {
+      issues.push({
+        severity: "error",
+        file: entry.owner,
+        message: `${entry.owner}: skills path must stay inside workspace: ${entry.skillPath}`,
+      });
+      continue;
+    }
+
+    let skillStat;
+    try {
+      skillStat = await stat(resolved.path);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
         issues.push({
           severity: "warning",
-          file: agent.relativePath,
-          message: `${agent.relativePath}: unknown tool '${tool}' in static doctor allowlist; verify Pi exposes it`,
+          file: entry.owner,
+          message: `${entry.owner}: skills path does not exist: ${entry.skillPath}`,
         });
+        continue;
       }
+      throw error;
     }
+
+    if (skillStat.isDirectory() && !await pathExists(project.root, path.posix.join(entry.skillPath, "skills.md"))) {
+      issues.push({
+        severity: "warning",
+        file: entry.owner,
+        message: `${entry.owner}: ${entry.skillPath} exists but no skills.md was found`,
+      });
+    }
+  }
+}
+
+function collectLegacyMetadataIssues(project, issues) {
+  for (const agent of project.agents) {
+    for (const field of ["tools", "consults", "tags"]) {
+      if (!Object.hasOwn(agent.frontmatter, field)) continue;
+      if ((agent.frontmatter[field] ?? []).length === 0) continue;
+      const guidance = legacyGuidance(field);
+      issues.push({
+        severity: "warning",
+        file: agent.relativePath,
+        message: `${agent.relativePath}: legacy field ${field} found; ${guidance}`,
+      });
+    }
+  }
+}
+
+function legacyGuidance(field) {
+  switch (field) {
+    case "tools":
+      return "migrate tool-use guidance to skills";
+    case "consults":
+      return "route by agent descriptions instead";
+    case "tags":
+      return "prefer high-signal descriptions";
+    default:
+      return "review this field";
   }
 }

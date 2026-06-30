@@ -44,6 +44,10 @@ export function formatDocReadPreamble(scope) {
   if (manifestLines.length > 0) {
     lines.push("", "Resolved doc files:", ...manifestLines);
   }
+  const skillManifestLines = formatSkillManifest(scope);
+  if (skillManifestLines.length > 0) {
+    lines.push("", "Resolved skill files:", ...skillManifestLines);
+  }
 
   return lines.join("\n");
 }
@@ -58,6 +62,13 @@ function formatDocManifest(scope) {
     return [];
   }
 
+  return manifest
+    .filter((entry) => entry.files?.length > 0)
+    .map((entry) => `- ${entry.declared}: ${entry.files.join(", ")}`);
+}
+
+function formatSkillManifest(scope) {
+  const manifest = scope.derived?.skillManifest ?? [];
   return manifest
     .filter((entry) => entry.files?.length > 0)
     .map((entry) => `- ${entry.declared}: ${entry.files.join(", ")}`);

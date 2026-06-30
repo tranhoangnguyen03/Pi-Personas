@@ -111,7 +111,7 @@ function buildRoundOneTask(scope, query, roster) {
     `Query: ${query}`,
     "",
     "Give your independent specialist position. Do not reference peer answers; you have not seen them yet.",
-    "Do not call persona_consult or subagent. The round-table is already the multi-agent interaction.",
+    "Stay inside this round-table unless you are blocked and need supervisor help.",
   ].join("\n"));
 }
 
@@ -129,7 +129,7 @@ function buildRoundTwoTask(scope, query, roster) {
     "{previous}",
     "",
     "Revise, qualify, reinforce, or concede your position after reading the peer positions.",
-    "Do not call persona_consult or subagent. Answer only as your specialist role.",
+    "Stay inside this round-table unless you are blocked and need supervisor help.",
   ].join("\n"));
 }
 
@@ -161,8 +161,9 @@ function scoreAgent(agent, query) {
   const haystack = tokenize([
     agent.name,
     agent.description,
-    ...(agent.tags ?? []),
     ...(agent.docs ?? []),
+    ...(agent.skills ?? []),
+    ...(agent.tags ?? []),
   ].join(" "));
   let score = 0;
   for (const token of queryTokens) {

@@ -55,14 +55,6 @@ function validateAgentFile(file, issues) {
     });
   }
 
-  if (role === "specialist" && file.frontmatter.consults?.includes("all")) {
-    issues.push({
-      severity: "error",
-      file: file.relativePath,
-      message: `${file.relativePath}: specialist cannot use consults: all`,
-    });
-  }
-
   validatePrimaryField(file, role, issues);
 
   for (const field of RUNTIME_ONLY_FIELDS) {

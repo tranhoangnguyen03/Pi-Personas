@@ -17,16 +17,32 @@ export async function resolveAgentScope(root, agentName) {
     ...(agent.docs ?? []),
   ]);
   const docResolution = await resolveDocReads(project.root, docs);
+  const skills = uniqueStrings([
+    ...(baselineFrontmatter.skills ?? []),
+    ...(agent.skills ?? []),
+  ]);
+  const skillResolution = await resolveSkillReads(project.root, skills);
   const tools = uniqueStrings([
     ...(baselineFrontmatter.tools ?? []),
     ...(agent.tools ?? []),
   ]);
+  const agentRoster = project.agents.map((candidate) => ({
+    name: candidate.name,
+    role: candidate.role,
+    description: candidate.description,
+  }));
 
   const promptSections = [];
   if (baselineBody) {
     promptSections.push({
       label: "Baseline",
       body: baselineBody,
+    });
+  }
+  if (agentRoster.length > 0) {
+    promptSections.push({
+      label: "Agent Roster",
+      body: formatAgentRoster(agentRoster),
     });
   }
   if (agentBody) {
@@ -40,14 +56,20 @@ export async function resolveAgentScope(root, agentName) {
     agent,
     baseline: project.baseline,
     docs,
+    skills,
     tools,
     consults: agent.consults,
     tags: agent.tags,
+    agentRoster,
     promptSections,
     prompt: promptSections.map((section) => `## ${section.label}\n\n${section.body}`).join("\n\n"),
     derived: {
-      defaultReads: docResolution.reads,
+      defaultReads: uniqueStrings([
+        ...skillResolution.reads,
+        ...docResolution.reads,
+      ]),
       docManifest: docResolution.manifest,
+      skillManifest: skillResolution.manifest,
     },
   };
 }
@@ -62,6 +84,25 @@ async function resolveDocReads(root, docs) {
     const files = await expandDocPath(root, docPath);
     manifest.push({
       declared: docPath,
+      files,
+    });
+    reads.push(...files);
+  }
+
+  return {
+    reads: uniqueStrings(reads),
+    manifest,
+  };
+}
+
+async function resolveSkillReads(root, skills) {
+  const manifest = [];
+  const reads = [];
+
+  for (const skillPath of skills) {
+    const files = await expandSkillPath(root, skillPath);
+    manifest.push({
+      declared: skillPath,
       files,
     });
     reads.push(...files);
@@ -95,6 +136,35 @@ async function expandDocPath(root, docPath) {
   return listDirectoryFiles(root, resolved.path);
 }
 
+async function expandSkillPath(root, skillPath) {
+  const resolved = resolveWorkspacePath(root, skillPath);
+  if (!resolved.ok) return [];
+
+  let fileStat;
+  try {
+    fileStat = await stat(resolved.path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+
+  if (fileStat.isFile()) {
+    return [toWorkspacePath(root, resolved.path)];
+  }
+  if (!fileStat.isDirectory()) {
+    return [];
+  }
+
+  const skillFile = path.join(resolved.path, "skills.md");
+  try {
+    const skillStat = await stat(skillFile);
+    return skillStat.isFile() ? [toWorkspacePath(root, skillFile)] : [];
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 async function listDirectoryFiles(root, dirPath) {
   const entries = await readdir(dirPath, { withFileTypes: true });
   const files = [];
@@ -114,4 +184,10 @@ async function listDirectoryFiles(root, dirPath) {
 
 function toWorkspacePath(root, filePath) {
   return path.relative(root, filePath).split(path.sep).join("/");
+}
+
+function formatAgentRoster(agentRoster) {
+  return agentRoster
+    .map((agent) => `- ${agent.name} - ${agent.role}: ${agent.description}`)
+    .join("\n");
 }

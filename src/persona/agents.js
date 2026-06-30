@@ -124,6 +124,7 @@ function toAgent(file) {
     model: file.frontmatter.model,
     tools: file.frontmatter.tools ?? [],
     docs: file.frontmatter.docs ?? [],
+    skills: file.frontmatter.skills ?? [],
     consults: file.frontmatter.consults ?? [],
     tags: file.frontmatter.tags ?? [],
     frontmatter: file.frontmatter,

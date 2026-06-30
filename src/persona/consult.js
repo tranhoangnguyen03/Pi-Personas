@@ -26,7 +26,6 @@ export async function resolveConsultLaunchRequest(root, input) {
   const project = await discoverPersonaProject(root);
   const requester = findAgent(project, input.requester, "requester");
   const consultant = findAgent(project, input.consultant, "consultant");
-  assertCanConsult(requester, consultant);
 
   const consultantScope = await resolveAgentScope(root, consultant.name);
   const envelope = buildConsultEnvelope({
@@ -43,6 +42,7 @@ export async function resolveConsultLaunchRequest(root, input) {
     context: envelope.consult.context,
     envelope,
     docs: consultantScope.docs,
+    skills: consultantScope.skills,
     tools: consultantScope.tools,
     consults: consultantScope.consults,
     tags: consultantScope.tags,
@@ -98,7 +98,7 @@ function buildConsultTask(scope, envelope) {
     `constraints: ${consult.constraints || "none"}`,
     `expectedOutput: ${consult.expectedOutput || "focused answer for the requester"}`,
     "",
-    "Do not call persona_consult from this consult response. Answer the requester directly from your own scope.",
+    "Answer the requester directly from your own resolved docs and skills. Seek supervisor help only if you are blocked.",
   ].join("\n"));
 
   const baseline = scope.promptSections.find((section) => section.label === "Baseline")?.body;
@@ -107,12 +107,6 @@ function buildConsultTask(scope, envelope) {
   }
 
   return sections.join("\n\n");
-}
-
-function assertCanConsult(requester, consultant) {
-  if (requester.consults.includes("all")) return;
-  if (requester.consults.includes(consultant.name)) return;
-  throw new Error(`${requester.name} cannot consult ${consultant.name}`);
 }
 
 function findAgent(project, name, label) {
