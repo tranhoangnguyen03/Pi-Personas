@@ -5,22 +5,27 @@ import {
   createAgentScaffold,
   createDocsIndex,
   createPersonaProjectScaffold,
+  applyPersonaInitFromManifest,
   discoverPersonaProject,
   formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatDocsIndexReport,
   formatDoctorReport,
+  formatPersonaInitManifestReport,
   formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
+  parsePersonaInitArgs,
   parsePersonaNewArgs,
+  planPersonaInitFromManifest,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
   runDoctor,
   sendPersonaOutput,
   runSubagentBridgeRequest,
+  statusPersonaInitFromManifest,
 } from "../src/persona/index.js";
 
 const REGISTERED_PERSONA_COMMANDS = new Set<string>();
@@ -152,10 +157,28 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
 
       if (subcommand === "init") {
+        const rawArgs = trimmed.slice("init".length).trim();
         try {
-          const result = await createPersonaProjectScaffold(ctx.cwd);
-          registerPersonaCommand(result.primaryGeneralist);
-          sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
+          const parsed = parsePersonaInitArgs(rawArgs);
+          if (parsed.mode === "basic") {
+            const result = await createPersonaProjectScaffold(ctx.cwd);
+            registerPersonaCommand(result.primaryGeneralist);
+            sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
+            return;
+          }
+          if (parsed.mode === "plan") {
+            const result = await planPersonaInitFromManifest(ctx.cwd, parsed.from);
+            sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
+            return;
+          }
+          if (parsed.mode === "status") {
+            const result = await statusPersonaInitFromManifest(ctx.cwd, parsed.from);
+            sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
+            return;
+          }
+          const result = await applyPersonaInitFromManifest(ctx.cwd, parsed.from);
+          await registerProjectCommands(ctx.cwd);
+          sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
         } catch (error) {
           sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
@@ -278,6 +301,9 @@ function normalizeCommandText(value: string): string {
 function personaUsage(): string {
   return [
     "Usage: /persona init",
+    "Usage: /persona init --plan --from <file>",
+    "Usage: /persona init --from <file>",
+    "Usage: /persona init status --from <file>",
     "Usage: /persona doctor",
     "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills native-skill[,native-skill]]",
     "Usage: /persona index [docs-dir]",

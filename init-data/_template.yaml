@@ -1,0 +1,56 @@
+version: 1
+project:
+  name: my-business-operating-layer
+
+baseline:
+  docs:
+    - docs/shared/
+  skills: []
+  prompt: |
+    Shared operating context for every persona.
+
+    Keep answers practical, concise, and grounded in the available docs. Answer
+    directly when shared context is enough. Consult specialists when the request
+    clearly needs their perspective.
+
+docs:
+  files:
+    docs/shared/_index.md: |
+      # Shared Docs Index
+
+      - business-context.md: facts, priorities, constraints, and open questions.
+    docs/shared/business-context.md: |
+      # Business Context
+
+      Add the user's business facts, priorities, constraints, audience,
+      products, services, channels, and recurring decisions here.
+    docs/workstreams/example-specialist/_index.md: |
+      # Example Specialist Docs Index
+
+      - brief.md: scope and output expectations.
+    docs/workstreams/example-specialist/brief.md: |
+      # Example Specialist Brief
+
+      Replace this with the specialist's operating notes.
+
+agents:
+  - name: generalist
+    role: generalist
+    primary: true
+    description: Routes requests, answers directly, and synthesizes specialist input.
+    docs: []
+    skills: []
+    prompt: |
+      You are the operating generalist. Answer directly when shared context is
+      enough. Consult the best-fit specialist when the request clearly needs a
+      specialist perspective.
+
+  - name: example-specialist
+    role: specialist
+    description: Replace with the specialist's routing description.
+    docs:
+      - docs/workstreams/example-specialist/
+    skills: []
+    prompt: |
+      You are the example specialist. Replace this with the specialist's role,
+      operating style, and expected output shape.

@@ -14,6 +14,13 @@ export {
 export { discoverPersonaProject } from "./agents.js";
 export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
+export {
+  applyPersonaInitFromManifest,
+  formatPersonaInitManifestReport,
+  parsePersonaInitArgs,
+  planPersonaInitFromManifest,
+  statusPersonaInitFromManifest,
+} from "./init-manifest.js";
 export { sendPersonaOutput } from "./pi-output.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export {

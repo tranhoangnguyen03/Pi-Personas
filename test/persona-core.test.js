@@ -20,8 +20,13 @@ import {
   formatDoctorReport,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
+  parsePersonaInitArgs,
   parsePersonaNewArgs,
   parseFrontmatterDocument,
+  planPersonaInitFromManifest,
+  applyPersonaInitFromManifest,
+  statusPersonaInitFromManifest,
+  formatPersonaInitManifestReport,
   normalizeAgentName,
   resolveAgentScope,
   resolveAgentPreview,
@@ -124,6 +129,54 @@ function createEventBus(onRequest) {
   };
 }
 
+function starterInitManifest() {
+  return `version: 1
+project:
+  name: test-business
+
+baseline:
+  docs:
+    - docs/shared/
+  skills: []
+  prompt: |
+    Shared test baseline.
+
+docs:
+  files:
+    docs/shared/_index.md: |
+      # Shared Index
+
+      - context.md: shared context.
+    docs/shared/context.md: |
+      TEST_BUSINESS_CONTEXT
+    docs/workstreams/operator/_index.md: |
+      # Operator Index
+
+      - brief.md: operator brief.
+    docs/workstreams/operator/brief.md: |
+      Operator workstream notes.
+
+agents:
+  - name: generalist
+    role: generalist
+    primary: true
+    description: Routes test business requests.
+    docs: []
+    skills: []
+    prompt: |
+      Generalist prompt.
+
+  - name: operator
+    role: specialist
+    description: Runs operating checklists.
+    docs:
+      - docs/workstreams/operator/
+    skills: []
+    prompt: |
+      Operator prompt.
+`;
+}
+
 test("package manifest exposes Pi Persona as a Pi extension package", async () => {
   const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
 
@@ -137,12 +190,14 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /registerCommand\("persona"/);
   assert.doesNotMatch(source, /registerCommand\("agent"/);
   assert.match(source, /\/persona init/);
+  assert.match(source, /parsePersonaInitArgs/);
   assert.match(source, /\/persona doctor/);
   assert.match(source, /\/persona index \[docs-dir\]/);
   assert.doesNotMatch(source, /\/agent doctor/);
   assert.match(source, /parsePersonaNewArgs/);
   assert.match(source, /formatAgentScaffoldCreatedMessage/);
   assert.match(source, /createPersonaProjectScaffold/);
+  assert.match(source, /planPersonaInitFromManifest/);
   assert.match(source, /createDocsIndex/);
 });
 
@@ -1526,6 +1581,82 @@ test("formatPersonaProjectScaffoldCreatedMessage gives init next steps", async (
     "Primary generalist: /generalist",
     "Next: add specialists with /persona new <name>, then run /persona doctor",
   ].join("\n"));
+});
+
+test("parsePersonaInitArgs handles basic plan apply and status modes", () => {
+  assert.deepEqual(parsePersonaInitArgs(""), { mode: "basic" });
+  assert.deepEqual(parsePersonaInitArgs("--plan --from init-data/business.yaml"), {
+    mode: "plan",
+    from: "init-data/business.yaml",
+  });
+  assert.deepEqual(parsePersonaInitArgs("--from init-data/business.yaml"), {
+    mode: "apply",
+    from: "init-data/business.yaml",
+  });
+  assert.deepEqual(parsePersonaInitArgs("status --from init-data/business.yaml"), {
+    mode: "status",
+    from: "init-data/business.yaml",
+  });
+
+  assert.throws(
+    () => parsePersonaInitArgs("--plan"),
+    /missing --from/,
+  );
+  assert.throws(
+    () => parsePersonaInitArgs("draft --out init-data/business.yaml"),
+    /\/persona init draft is not implemented yet/,
+  );
+});
+
+test("manifest init plans applies and reports status for a starter layer", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-manifest-init-"));
+  await writeText(path.join(root, "init-data/business.yaml"), starterInitManifest());
+
+  const plan = await planPersonaInitFromManifest(root, "init-data/business.yaml");
+  assert.equal(plan.mode, "plan");
+  assert.equal(plan.projectName, "test-business");
+  assert.ok(plan.actions.some((action) => action.status === "create" && action.path === ".pi/agents/_baseline.md"));
+  assert.ok(plan.actions.some((action) => action.status === "create" && action.path === ".pi/agents/generalist.md"));
+  assert.ok(plan.actions.some((action) => action.status === "create" && action.path === ".pi/agents/operator.md"));
+  assert.ok(plan.actions.some((action) => action.status === "create" && action.path === "docs/shared/context.md"));
+  assert.ok(plan.actions.some((action) => action.status === "update" && action.agent === "generalist"));
+
+  const planReport = formatPersonaInitManifestReport(plan);
+  assert.match(planReport, /Pi Persona Init Plan/);
+  assert.match(planReport, /create \.pi\/agents\/operator\.md/);
+  assert.match(planReport, /update runtime override: generalist/);
+
+  const applied = await applyPersonaInitFromManifest(root, "init-data/business.yaml");
+  assert.equal(applied.mode, "apply");
+  assert.ok(applied.actions.some((action) => action.status === "created" && action.path === ".pi/agents/operator.md"));
+  assert.ok(applied.actions.some((action) => action.status === "updated" && action.agent === "operator"));
+
+  const baseline = await readFile(path.join(root, ".pi/agents/_baseline.md"), "utf8");
+  const generalist = await readFile(path.join(root, ".pi/agents/generalist.md"), "utf8");
+  const operator = await readFile(path.join(root, ".pi/agents/operator.md"), "utf8");
+  const doc = await readFile(path.join(root, "docs/shared/context.md"), "utf8");
+  assert.match(baseline, /docs:\n  - docs\/shared\//);
+  assert.match(generalist, /primary: true/);
+  assert.match(operator, /description: Runs operating checklists\./);
+  assert.match(doc, /TEST_BUSINESS_CONTEXT/);
+
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  assert.deepEqual(settings.subagents.agentOverrides.generalist.tools, ["subagent"]);
+  assert.deepEqual(settings.subagents.agentOverrides.operator.tools, ["subagent"]);
+
+  const doctor = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+  assert.equal(doctor.status, "pass");
+
+  const status = await statusPersonaInitFromManifest(root, "init-data/business.yaml");
+  assert.equal(status.mode, "status");
+  assert.ok(status.items.every((item) => item.state === "done"));
+  assert.match(formatPersonaInitManifestReport(status), /\[done\] \.pi\/agents\/operator\.md/);
+  assert.match(formatPersonaInitManifestReport(status), /\[next\] run \/persona doctor/);
 });
 
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {

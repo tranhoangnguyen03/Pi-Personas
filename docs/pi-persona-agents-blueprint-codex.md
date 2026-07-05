@@ -423,22 +423,22 @@ what it left alone. It is setup assistance, not a policy gate. Users still add
 their real operating layer through `/persona new`, direct file edits, or
 conversational authoring.
 
-Manifest-backed init is the next ergonomic layer. The target flow is:
+Manifest-backed init is the richer setup layer. The target flow is:
 
 ```text
-/persona init draft --out mock-data/business-operating-layer.yaml
-/persona init --plan --from mock-data/business-operating-layer.yaml
-/persona init --from mock-data/business-operating-layer.yaml
-/persona init status --from mock-data/business-operating-layer.yaml
+/persona init draft --out init-data/business-operating-layer.yaml
+/persona init --plan --from init-data/business-operating-layer.yaml
+/persona init --from init-data/business-operating-layer.yaml
+/persona init status --from init-data/business-operating-layer.yaml
 /persona doctor
 /persona-list
 ```
 
 The split is deliberate:
 
-- `/persona init draft` is the optional agentic authoring aid. It interviews the
-  user, proposes agents/docs/native skill names, and writes or revises a YAML
-  manifest for human review.
+- `/persona init draft` is the planned optional agentic authoring aid. It
+  interviews the user, proposes agents/docs/native skill names, and writes or
+  revises a YAML manifest for human review.
 - `/persona init --from <file>` is mechanical. It parses YAML, validates it,
   writes files, preserves existing content unless an explicit overwrite mode is
   added, updates runtime overrides, and makes no creative decisions.
@@ -738,9 +738,9 @@ Creates the minimal baseline, primary generalist, shared docs index, and
 generalist runtime override for an empty project. It preserves existing files
 and leaves real specialist content to the user.
 
-Manifest-backed variants are planned for richer setup:
+Manifest-backed variants support richer setup:
 
-- `/persona init draft --out <file>` for optional agentic YAML authoring.
+- `/persona init draft --out <file>` for planned optional agentic YAML authoring.
 - `/persona init --plan --from <file>` for a dry-run checklist.
 - `/persona init --from <file>` for deterministic file creation.
 - `/persona init status --from <file>` for progress and next-step reporting.
