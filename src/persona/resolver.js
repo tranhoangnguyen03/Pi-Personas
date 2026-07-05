@@ -1,7 +1,5 @@
-import { readdir, stat } from "node:fs/promises";
-import path from "node:path";
-
-import { discoverPersonaProject, findUniqueAgent, resolveWorkspacePath } from "./agents.js";
+import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
+import { inspectDocPath } from "./doc-index.js";
 import { uniqueStrings } from "./frontmatter.js";
 
 export async function resolveAgentScope(root, agentName) {
@@ -21,7 +19,6 @@ export async function resolveAgentScope(root, agentName) {
     ...(baselineFrontmatter.skills ?? []),
     ...(agent.skills ?? []),
   ]);
-  const skillResolution = await resolveSkillReads(project.root, skills);
   const tools = uniqueStrings([
     ...(baselineFrontmatter.tools ?? []),
     ...(agent.tools ?? []),
@@ -64,12 +61,8 @@ export async function resolveAgentScope(root, agentName) {
     promptSections,
     prompt: promptSections.map((section) => `## ${section.label}\n\n${section.body}`).join("\n\n"),
     derived: {
-      defaultReads: uniqueStrings([
-        ...skillResolution.reads,
-        ...docResolution.reads,
-      ]),
+      defaultReads: uniqueStrings(docResolution.reads),
       docManifest: docResolution.manifest,
-      skillManifest: skillResolution.manifest,
     },
   };
 }
@@ -81,31 +74,14 @@ async function resolveDocReads(root, docs) {
   const reads = [];
 
   for (const docPath of docs) {
-    const files = await expandDocPath(root, docPath);
+    const expansion = await expandDocPath(root, docPath);
     manifest.push({
       declared: docPath,
-      files,
+      files: expansion.files,
+      deferred: expansion.deferred,
+      indexFile: expansion.indexFile,
     });
-    reads.push(...files);
-  }
-
-  return {
-    reads: uniqueStrings(reads),
-    manifest,
-  };
-}
-
-async function resolveSkillReads(root, skills) {
-  const manifest = [];
-  const reads = [];
-
-  for (const skillPath of skills) {
-    const files = await expandSkillPath(root, skillPath);
-    manifest.push({
-      declared: skillPath,
-      files,
-    });
-    reads.push(...files);
+    reads.push(...expansion.files);
   }
 
   return {
@@ -115,75 +91,12 @@ async function resolveSkillReads(root, skills) {
 }
 
 async function expandDocPath(root, docPath) {
-  const resolved = resolveWorkspacePath(root, docPath);
-  if (!resolved.ok) return [];
-
-  let fileStat;
-  try {
-    fileStat = await stat(resolved.path);
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
-
-  if (fileStat.isFile()) {
-    return [toWorkspacePath(root, resolved.path)];
-  }
-  if (!fileStat.isDirectory()) {
-    return [];
-  }
-
-  return listDirectoryFiles(root, resolved.path);
-}
-
-async function expandSkillPath(root, skillPath) {
-  const resolved = resolveWorkspacePath(root, skillPath);
-  if (!resolved.ok) return [];
-
-  let fileStat;
-  try {
-    fileStat = await stat(resolved.path);
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
-
-  if (fileStat.isFile()) {
-    return [toWorkspacePath(root, resolved.path)];
-  }
-  if (!fileStat.isDirectory()) {
-    return [];
-  }
-
-  const skillFile = path.join(resolved.path, "skills.md");
-  try {
-    const skillStat = await stat(skillFile);
-    return skillStat.isFile() ? [toWorkspacePath(root, skillFile)] : [];
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-async function listDirectoryFiles(root, dirPath) {
-  const entries = await readdir(dirPath, { withFileTypes: true });
-  const files = [];
-
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const fullPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listDirectoryFiles(root, fullPath));
-    } else if (entry.isFile()) {
-      files.push(toWorkspacePath(root, fullPath));
-    }
-  }
-
-  return files.sort();
-}
-
-function toWorkspacePath(root, filePath) {
-  return path.relative(root, filePath).split(path.sep).join("/");
+  const inspection = await inspectDocPath(root, docPath);
+  return {
+    files: inspection.files ?? [],
+    deferred: inspection.deferred ?? [],
+    indexFile: inspection.indexFile ?? null,
+  };
 }
 
 function formatAgentRoster(agentRoster) {

@@ -3,12 +3,15 @@ import { Type } from "typebox";
 
 import {
   createAgentScaffold,
+  createDocsIndex,
   discoverPersonaProject,
   formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
+  formatDocsIndexReport,
   formatDoctorReport,
   formatPersonaList,
   formatRoundtableRosterPreview,
+  parsePersonaIndexArgs,
   parsePersonaNewArgs,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
@@ -133,7 +136,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("persona", {
-    description: "Pi Persona commands. Supports: /persona doctor, /persona new <name>",
+    description: "Pi Persona commands. Supports: /persona doctor, /persona new <name>, /persona index [docs-dir]",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
@@ -157,6 +160,19 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           const result = await createAgentScaffold(ctx.cwd, parsed.rawName, parsed.options);
           registerPersonaCommand(result.agentName);
           sendPersonaOutput(pi, ctx, formatAgentScaffoldCreatedMessage(result), "info");
+        } catch (error) {
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
+      if (subcommand === "index") {
+        const rawArgs = trimmed.slice("index".length).trim();
+        try {
+          const parsed = parsePersonaIndexArgs(rawArgs);
+          const result = await createDocsIndex(ctx.cwd, parsed);
+          const hasError = result.results.some((entry: any) => entry.status === "error");
+          sendPersonaOutput(pi, ctx, formatDocsIndexReport(result), hasError ? "error" : "info");
         } catch (error) {
           sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
@@ -249,7 +265,9 @@ function normalizeCommandText(value: string): string {
 function personaUsage(): string {
   return [
     "Usage: /persona doctor",
-    "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills path[,path]]",
+    "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills native-skill[,native-skill]]",
+    "Usage: /persona index [docs-dir]",
+    "Usage: /persona index --all",
   ].join("\n");
 }
 

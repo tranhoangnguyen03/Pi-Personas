@@ -7,14 +7,17 @@ import assert from "node:assert/strict";
 import {
   buildAgentLaunchRequest,
   buildConsultEnvelope,
+  createDocsIndex,
   discoverPersonaProject,
   createAgentScaffold,
   formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatConsultProvenance,
+  formatDocsIndexReport,
   formatPersonaList,
   formatDoctorReport,
   formatRoundtableRosterPreview,
+  parsePersonaIndexArgs,
   parsePersonaNewArgs,
   parseFrontmatterDocument,
   normalizeAgentName,
@@ -42,7 +45,7 @@ async function createWorkspace() {
 
   await writeText(path.join(root, ".pi/agents/_baseline.md"), `---
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: shared-skill
 ---
 Shared operating context.
 `);
@@ -61,7 +64,7 @@ name: brand
 role: specialist
 description: Brand strategy specialist.
 docs: docs/workstreams/brand/
-skills: .pi/skills/workstreams/brand/
+skills: brand-skill
 ---
 Brand prompt.
 `);
@@ -71,7 +74,7 @@ name: guideline
 role: specialist
 description: Guideline reviewer.
 docs: docs/workstreams/guideline/
-skills: .pi/skills/workstreams/guideline/
+skills: guideline-skill
 ---
 Guideline prompt.
 `);
@@ -79,9 +82,6 @@ Guideline prompt.
   await writeText(path.join(root, "docs/shared/company.md"), "Shared doc\n");
   await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand doc\n");
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline doc\n");
-  await writeText(path.join(root, ".pi/skills/shared/skills.md"), "Shared skill guidance\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/brand/skills.md"), "Brand skill guidance\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/guideline/skills.md"), "Guideline skill guidance\n");
   await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
     subagents: {
       agentOverrides: {
@@ -135,9 +135,11 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /registerCommand\("persona"/);
   assert.doesNotMatch(source, /registerCommand\("agent"/);
   assert.match(source, /\/persona doctor/);
+  assert.match(source, /\/persona index \[docs-dir\]/);
   assert.doesNotMatch(source, /\/agent doctor/);
   assert.match(source, /parsePersonaNewArgs/);
   assert.match(source, /formatAgentScaffoldCreatedMessage/);
+  assert.match(source, /createDocsIndex/);
 });
 
 test("extension registers the persona_consult tool", async () => {
@@ -216,7 +218,7 @@ test("discovers launchable project agents and keeps baseline as control file", a
   assert.equal(project.agents.find((agent) => agent.name === "brand").role, "specialist");
 });
 
-test("doctor validates dependencies, docs, skills, duplicate names, and generalist count", async () => {
+test("doctor validates dependencies, docs, skill misuse, duplicate names, and generalist count", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/duplicate.md"), `---
@@ -259,7 +261,8 @@ Bad control prompt.
   assert.ok(messages.some((message) => message.includes("multiple primary generalist agents")));
   assert.ok(messages.some((message) => message.includes("Set exactly one generalist to primary: true")));
   assert.ok(messages.some((message) => message.includes("docs path does not exist: docs/missing/")));
-  assert.ok(messages.some((message) => message.includes("skills path does not exist: .pi/skills/missing/")));
+  assert.ok(messages.some((message) => message.includes("skills entry looks like a path")));
+  assert.ok(messages.some((message) => message.includes(".pi/skills/missing/")));
   assert.ok(messages.some((message) => message.includes("control file is launchable")));
 });
 
@@ -302,12 +305,12 @@ Legacy prompt.
   });
 
   assert.equal(result.status, "warning");
-  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tools found; migrate tool-use guidance to skills")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tools found; migrate tool-use guidance to native pi-subagents skills")));
   assert.ok(result.issues.some((issue) => issue.message.includes("legacy field consults found; route by agent descriptions instead")));
   assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tags found; prefer high-signal descriptions")));
 });
 
-test("doctor validates skill paths and skills.md breadcrumbs", async () => {
+test("doctor warns when skills are path-style instead of native names", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/brand.md"), `---
@@ -319,7 +322,6 @@ skills: .pi/skills/workstreams/empty/
 ---
 Brand prompt.
 `);
-  await mkdir(path.join(root, ".pi/skills/workstreams/empty/"), { recursive: true });
 
   const result = await runDoctor(root, {
     dependencyStatus: {
@@ -329,7 +331,35 @@ Brand prompt.
   });
 
   assert.equal(result.status, "warning");
-  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: .pi/skills/workstreams/empty/ exists but no skills.md was found")));
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: skills entry looks like a path")));
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/skills/workstreams/empty/")));
+});
+
+test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "9.9.1" })}\n`,
+  );
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-intercom/package.json"),
+    `${JSON.stringify({ version: "9.9.2" })}\n`,
+  );
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const result = await runDoctor(root);
+    assert.equal(result.dependencies.piSubagents.version, "9.9.1");
+    assert.equal(result.dependencies.piIntercom.version, "9.9.2");
+  } finally {
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+  }
 });
 
 test("doctor warns when a persona lacks nested consult runtime provisioning", async () => {
@@ -340,7 +370,7 @@ name: manual
 role: specialist
 description: Manually created specialist.
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: shared-skill
 ---
 Manual prompt.
 `);
@@ -365,7 +395,7 @@ role: specialist
 description: Manually created specialist.
 tools: subagent
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: shared-skill
 ---
 Manual prompt.
 `);
@@ -393,8 +423,8 @@ test("resolver preview merges baseline and agent awareness while deriving runtim
     "docs/workstreams/brand/",
   ]);
   assert.deepEqual(preview.skills, [
-    ".pi/skills/shared/",
-    ".pi/skills/workstreams/brand/",
+    "shared-skill",
+    "brand-skill",
   ]);
   assert.deepEqual(preview.agentRoster.map((agent) => agent.name), [
     "brand",
@@ -402,8 +432,6 @@ test("resolver preview merges baseline and agent awareness while deriving runtim
     "guideline",
   ]);
   assert.deepEqual(preview.derived.defaultReads, [
-    ".pi/skills/shared/skills.md",
-    ".pi/skills/workstreams/brand/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/brand/brief.md",
   ]);
@@ -411,8 +439,9 @@ test("resolver preview merges baseline and agent awareness while deriving runtim
   assert.equal(Object.hasOwn(preview.agent.frontmatter, "systemPromptMode"), false);
 });
 
-test("resolver expands directory docs into concrete runtime reads while preserving declared docs", async () => {
+test("resolver expands directory docs through progressive discovery reads", async () => {
   const root = await createWorkspace();
+  await writeText(path.join(root, "docs/workstreams/brand/_index.md"), "Brand index\n");
   await writeText(path.join(root, "docs/workstreams/brand/examples/example.md"), "Brand example doc\n");
 
   const scope = await resolveAgentScope(root, "brand");
@@ -422,25 +451,109 @@ test("resolver expands directory docs into concrete runtime reads while preservi
     "docs/workstreams/brand/",
   ]);
   assert.deepEqual(scope.derived.defaultReads, [
-    ".pi/skills/shared/skills.md",
-    ".pi/skills/workstreams/brand/skills.md",
     "docs/shared/company.md",
+    "docs/workstreams/brand/_index.md",
     "docs/workstreams/brand/brief.md",
-    "docs/workstreams/brand/examples/example.md",
   ]);
   assert.deepEqual(scope.derived.docManifest, [
     {
       declared: "docs/shared/",
       files: ["docs/shared/company.md"],
+      deferred: [],
+      indexFile: null,
     },
     {
       declared: "docs/workstreams/brand/",
       files: [
+        "docs/workstreams/brand/_index.md",
         "docs/workstreams/brand/brief.md",
+      ],
+      deferred: [
         "docs/workstreams/brand/examples/example.md",
       ],
+      indexFile: "docs/workstreams/brand/_index.md",
     },
   ]);
+
+  const launch = buildAgentLaunchRequest(scope, { task: "Use progressive docs." });
+  assert.match(launch.subagentParams.task, /Progressive doc discovery:/);
+  assert.match(launch.subagentParams.task, /docs\/workstreams\/brand\/: 1 nested file not included in reads; read docs\/workstreams\/brand\/_index\.md/);
+  assert.doesNotMatch(launch.subagentParams.task.split("\n\n")[0], /examples\/example\.md/);
+});
+
+test("doctor warns when nested directory docs have no index", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, "docs/workstreams/brand/examples/example.md"), "Brand example doc\n");
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "warning");
+  assert.ok(result.issues.some((issue) => issue.message.includes("docs/workstreams/brand/ has 1 nested docs but no _index.md")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("run /persona index docs/workstreams/brand/")));
+});
+
+test("launch prompt reports deferred nested docs even when nothing is included in reads", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-nested-only-"));
+
+  await writeText(path.join(root, ".pi/agents/nested.md"), `---
+name: nested
+role: specialist
+description: Nested docs specialist.
+docs: docs/nested/
+---
+Nested prompt.
+`);
+  await writeText(path.join(root, "docs/nested/deep/example.md"), "Deep doc\n");
+
+  const scope = await resolveAgentScope(root, "nested");
+  const launch = buildAgentLaunchRequest(scope, { task: "Find deep docs." });
+
+  assert.equal(Object.hasOwn(launch.subagentParams, "reads"), false);
+  assert.match(launch.subagentParams.task, /\[Read from: none\]/);
+  assert.match(launch.subagentParams.task, /Progressive doc discovery:/);
+  assert.match(launch.subagentParams.task, /docs\/nested\/: 1 nested file not included in reads; no _index file was found/);
+});
+
+test("persona docs index preserves hand notes while refreshing generated catalogue", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, "docs/workstreams/brand/_index.md"), "# Brand Notes\n\nHuman note.\n");
+  await writeText(path.join(root, "docs/workstreams/brand/examples/example.md"), "Brand example doc\n");
+
+  assert.deepEqual(parsePersonaIndexArgs("docs/workstreams/brand/"), {
+    all: false,
+    target: "docs/workstreams/brand/",
+  });
+  assert.deepEqual(parsePersonaIndexArgs("--all"), {
+    all: true,
+    target: null,
+  });
+
+  const result = await createDocsIndex(root, { target: "docs/workstreams/brand/" });
+  const report = formatDocsIndexReport(result);
+  const content = await readFile(path.join(root, "docs/workstreams/brand/_index.md"), "utf8");
+
+  assert.match(report, /updated docs\/workstreams\/brand\/_index\.md/);
+  assert.match(report, /top-level files: 2/);
+  assert.match(report, /nested files: 1/);
+  assert.match(content, /Human note\./);
+  assert.match(content, /<!-- pi-persona-index:start -->/);
+  assert.match(content, /`_index\.md`/);
+  assert.match(content, /`brief\.md`/);
+  assert.match(content, /`examples\/example\.md`/);
+  assert.match(content, /<!-- pi-persona-index:end -->/);
+
+  await writeText(path.join(root, "docs/workstreams/guideline/examples/example.md"), "Guideline example doc\n");
+  const created = await createDocsIndex(root, { target: "docs/workstreams/guideline/" });
+  const createdContent = await readFile(path.join(root, "docs/workstreams/guideline/_index.md"), "utf8");
+  assert.match(formatDocsIndexReport(created), /top-level files: 2/);
+  assert.match(createdContent, /`_index\.md`/);
+  assert.match(createdContent, /`rules\.md`/);
+  assert.match(createdContent, /`examples\/example\.md`/);
 });
 
 test("formats doctor report with actionable sections", async () => {
@@ -672,8 +785,8 @@ docs:
   - docs/shared/
   - docs/workstreams/brand/
 skills:
-  - .pi/skills/shared/
-  - .pi/skills/workstreams/brand/
+  - shared-skill
+  - brand-skill
 consults: [guideline, launch]
 tags:
   - brand
@@ -685,7 +798,7 @@ Prompt body.
   assert.equal(parsed.frontmatter.description, "Handles values with: colons");
   assert.deepEqual(parsed.frontmatter.tools, ["read", "write"]);
   assert.deepEqual(parsed.frontmatter.docs, ["docs/shared/", "docs/workstreams/brand/"]);
-  assert.deepEqual(parsed.frontmatter.skills, [".pi/skills/shared/", ".pi/skills/workstreams/brand/"]);
+  assert.deepEqual(parsed.frontmatter.skills, ["shared-skill", "brand-skill"]);
   assert.deepEqual(parsed.frontmatter.consults, ["guideline", "launch"]);
   assert.deepEqual(parsed.frontmatter.tags, ["brand"]);
 });
@@ -698,13 +811,12 @@ name: operator
 role: specialist
 description: Operations specialist.
 docs: docs/workstreams/operator/
-skills: .pi/skills/workstreams/operator/
+skills: operator-skill
 ---
 Operator prompt.
 `);
 
   await writeText(path.join(root, "docs/workstreams/operator/runbook.md"), "Operator doc\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/operator/skills.md"), "Operator skill\n");
 
   const scope = await resolveAgentScope(root, "operator");
 
@@ -715,12 +827,10 @@ Operator prompt.
     "docs/workstreams/operator/",
   ]);
   assert.deepEqual(scope.skills, [
-    ".pi/skills/shared/",
-    ".pi/skills/workstreams/operator/",
+    "shared-skill",
+    "operator-skill",
   ]);
   assert.deepEqual(scope.derived.defaultReads, [
-    ".pi/skills/shared/skills.md",
-    ".pi/skills/workstreams/operator/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/operator/runbook.md",
   ]);
@@ -731,8 +841,8 @@ Operator prompt.
   assert.doesNotMatch(scope.prompt, /Brand prompt/);
   assert.ok(!scope.docs.includes("docs/workstreams/brand/"));
   assert.ok(!scope.docs.includes("docs/workstreams/guideline/"));
-  assert.ok(!scope.skills.includes(".pi/skills/workstreams/brand/"));
-  assert.ok(!scope.skills.includes(".pi/skills/workstreams/guideline/"));
+  assert.ok(!scope.skills.includes("brand-skill"));
+  assert.ok(!scope.skills.includes("guideline-skill"));
 });
 
 test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", async () => {
@@ -749,23 +859,22 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
     "docs/shared/",
     "docs/workstreams/brand/",
   ]);
-  assert.deepEqual(launch.skills, [".pi/skills/shared/", ".pi/skills/workstreams/brand/"]);
+  assert.deepEqual(launch.skills, ["shared-skill", "brand-skill"]);
   assert.deepEqual(launch.subagentParams, {
     agent: "brand",
     task: launch.subagentParams.task,
     clarify: false,
     agentScope: "both",
     context: "fresh",
+    skill: ["shared-skill", "brand-skill"],
     reads: [
-      ".pi/skills/shared/skills.md",
-      ".pi/skills/workstreams/brand/skills.md",
       "docs/shared/company.md",
       "docs/workstreams/brand/brief.md",
     ],
   });
-  assert.match(launch.subagentParams.task, /^\[Read from: \.pi\/skills\/shared\/skills\.md, \.pi\/skills\/workstreams\/brand\/skills\.md, docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
+  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
   assert.match(launch.subagentParams.task, /Resolved doc files:\n- docs\/shared\/: docs\/shared\/company\.md\n- docs\/workstreams\/brand\/: docs\/workstreams\/brand\/brief\.md/);
-  assert.match(launch.subagentParams.task, /Resolved skill files:\n- \.pi\/skills\/shared\/: \.pi\/skills\/shared\/skills\.md\n- \.pi\/skills\/workstreams\/brand\/: \.pi\/skills\/workstreams\/brand\/skills\.md/);
+  assert.doesNotMatch(launch.subagentParams.task, /Resolved skill files:/);
   assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
   assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
   assert.match(launch.subagentParams.task, /Tool: subagent/);
@@ -796,7 +905,7 @@ name: brand
 role: specialist
 description: Duplicate brand strategy specialist.
 docs: docs/workstreams/brand/
-skills: .pi/skills/workstreams/brand/
+skills: brand-skill
 ---
 Duplicate brand prompt.
 `);
@@ -823,16 +932,15 @@ test("resolveConsultLaunchRequest builds summarized fresh consultant scope by de
   assert.equal(consult.consultant.name, "guideline");
   assert.equal(consult.context, "fresh");
   assert.deepEqual(consult.docs, ["docs/shared/", "docs/workstreams/guideline/"]);
-  assert.deepEqual(consult.skills, [".pi/skills/shared/", ".pi/skills/workstreams/guideline/"]);
+  assert.deepEqual(consult.skills, ["shared-skill", "guideline-skill"]);
   assert.equal(consult.subagentParams.agent, "guideline");
   assert.equal(consult.subagentParams.context, "fresh");
+  assert.deepEqual(consult.subagentParams.skill, ["shared-skill", "guideline-skill"]);
   assert.deepEqual(consult.subagentParams.reads, [
-    ".pi/skills/shared/skills.md",
-    ".pi/skills/workstreams/guideline/skills.md",
     "docs/shared/company.md",
     "docs/workstreams/guideline/rules.md",
   ]);
-  assert.match(consult.subagentParams.task, /^\[Read from: \.pi\/skills\/shared\/skills\.md, \.pi\/skills\/workstreams\/guideline\/skills\.md, docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
+  assert.match(consult.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
   assert.match(consult.subagentParams.task, /consultant: guideline/);
   assert.match(consult.subagentParams.task, /summary: The requester is revising launch copy/);
   assert.doesNotMatch(consult.subagentParams.task, /Brand prompt/);
@@ -861,7 +969,7 @@ name: guideline
 role: specialist
 description: Duplicate guideline reviewer.
 docs: docs/workstreams/guideline/
-skills: .pi/skills/workstreams/guideline/
+skills: guideline-skill
 ---
 Duplicate guideline prompt.
 `);
@@ -947,7 +1055,7 @@ test("formatPersonaList shows read-only discovery details", async () => {
   assert.match(output, /skills: none/);
   assert.match(output, /brand - specialist/);
   assert.match(output, /docs: docs\/workstreams\/brand\//);
-  assert.match(output, /skills: \.pi\/skills\/workstreams\/brand\//);
+  assert.match(output, /skills: brand-skill/);
   assert.doesNotMatch(output, /launch/i);
 });
 
@@ -960,12 +1068,11 @@ role: specialist
 description: Pricing strategy specialist.
 model: openai/gpt-5
 docs: docs/workstreams/pricing/
-skills: .pi/skills/workstreams/pricing/
+skills: pricing-skill
 ---
 Pricing prompt.
 `);
   await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing doc\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/pricing/skills.md"), "Pricing skill\n");
 
   const roundtable = await resolveRoundtableLaunchRequest(root, {
     query: "Should brand positioning change pricing and guideline language?",
@@ -984,10 +1091,13 @@ Pricing prompt.
   assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
   const pricingRoundOne = roundtable.subagentParams.chain[0].parallel.find((step) => step.agent === "pricing");
   const brandRoundTwo = roundtable.subagentParams.chain[1].parallel.find((step) => step.agent === "brand");
-  assert.deepEqual(pricingRoundOne.reads, [".pi/skills/shared/skills.md", ".pi/skills/workstreams/pricing/skills.md", "docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
+  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
+  assert.deepEqual(pricingRoundOne.skill, ["shared-skill", "pricing-skill"]);
   assert.equal(pricingRoundOne.model, "openai/gpt-5");
-  assert.deepEqual(brandRoundTwo.reads, [".pi/skills/shared/skills.md", ".pi/skills/workstreams/brand/skills.md", "docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
-  assert.deepEqual(roundtable.subagentParams.chain[2].reads, [".pi/skills/shared/skills.md", "docs/shared/company.md"]);
+  assert.deepEqual(brandRoundTwo.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
+  assert.deepEqual(brandRoundTwo.skill, ["shared-skill", "brand-skill"]);
+  assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/company.md"]);
+  assert.deepEqual(roundtable.subagentParams.chain[2].skill, ["shared-skill"]);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Stay inside this round-table unless you are blocked/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);
@@ -1004,7 +1114,7 @@ name: brand
 role: specialist
 description: Duplicate brand strategy specialist.
 docs: docs/workstreams/brand/
-skills: .pi/skills/workstreams/brand/
+skills: brand-skill
 ---
 Duplicate brand prompt.
 `);
@@ -1026,7 +1136,7 @@ name: ${name}
 role: specialist
 description: ${name} specialist for market planning.
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: shared-skill
 ---
 ${name} prompt.
 `);
@@ -1210,26 +1320,26 @@ test("runSubagentBridgeRequest accepts delayed bridge start and response", async
 
 test("parsePersonaNewArgs accepts setup metadata options", () => {
   const parsed = parsePersonaNewArgs(
-    'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --skills .pi/skills/workstreams/market/',
+    'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --skills market-skill',
   );
 
   assert.equal(parsed.rawName, "Market Research");
   assert.equal(parsed.options.role, "specialist");
   assert.equal(parsed.options.description, "Market research specialist.");
   assert.deepEqual(parsed.options.docs, ["docs/workstreams/market/"]);
-  assert.deepEqual(parsed.options.skills, [".pi/skills/workstreams/market/"]);
+  assert.deepEqual(parsed.options.skills, ["market-skill"]);
 });
 
 test("parsePersonaNewArgs accepts equals options and rejects unsafe input", () => {
   const parsed = parsePersonaNewArgs(
-    'Ops Lead --role=generalist --description="Routes operational requests." --docs=docs/shared/,docs/workstreams/ops/ --skills=.pi/skills/shared/,.pi/skills/workstreams/ops/',
+    'Ops Lead --role=generalist --description="Routes operational requests." --docs=docs/shared/,docs/workstreams/ops/ --skills=shared-skill,ops-skill',
   );
 
   assert.equal(parsed.rawName, "Ops Lead");
   assert.equal(parsed.options.role, "generalist");
   assert.equal(parsed.options.description, "Routes operational requests.");
   assert.deepEqual(parsed.options.docs, ["docs/shared/", "docs/workstreams/ops/"]);
-  assert.deepEqual(parsed.options.skills, [".pi/skills/shared/", ".pi/skills/workstreams/ops/"]);
+  assert.deepEqual(parsed.options.skills, ["shared-skill", "ops-skill"]);
 
   assert.throws(
     () => parsePersonaNewArgs("Ops Lead --role runtime"),
@@ -1285,14 +1395,14 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
     role: "specialist",
     description: "Market research specialist.",
     docs: ["docs/workstreams/market/"],
-    skills: [".pi/skills/workstreams/market/"],
+    skills: ["market-skill"],
   });
   const content = await readFile(result.filePath, "utf8");
 
   assert.match(content, /role: specialist/);
   assert.match(content, /description: Market research specialist\./);
   assert.match(content, /docs: docs\/workstreams\/market\//);
-  assert.match(content, /skills: \.pi\/skills\/workstreams\/market\//);
+  assert.match(content, /skills: market-skill/);
   assert.doesNotMatch(content, /tools:/);
   assert.doesNotMatch(content, /consults:/);
   assert.doesNotMatch(content, /tags:/);
@@ -1304,7 +1414,7 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
   const agent = project.agents.find((candidate) => candidate.name === "market-research");
   assert.equal(agent.description, "Market research specialist.");
   assert.deepEqual(agent.docs, ["docs/workstreams/market/"]);
-  assert.deepEqual(agent.skills, [".pi/skills/workstreams/market/"]);
+  assert.deepEqual(agent.skills, ["market-skill"]);
 });
 
 test("createAgentScaffold preserves existing project settings while adding runtime subagent override", async () => {
@@ -1353,7 +1463,7 @@ test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
 
   const result = await createAgentScaffold(root, "Market Research", {
     docs: ["docs/workstreams/market/"],
-    skills: [".pi/skills/workstreams/market/"],
+    skills: ["market-skill"],
   });
 
   assert.equal(formatAgentScaffoldCreatedMessage(result), [
@@ -1361,7 +1471,7 @@ test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
     "",
     "Launch: /market-research",
     "Docs: docs/workstreams/market/",
-    "Skills: .pi/skills/workstreams/market/",
+    "Skills: market-skill",
     "Next: run /persona doctor",
   ].join("\n"));
 });
@@ -1388,7 +1498,7 @@ test("phase 7 full workflow composes setup docs doctor launch consult roundtable
 
   await writeText(path.join(root, ".pi/agents/_baseline.md"), `---
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: shared-skill
 ---
 Shared pilot context.
 `);
@@ -1396,10 +1506,6 @@ Shared pilot context.
   await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand pilot doc\n");
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline pilot doc\n");
   await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing pilot doc\n");
-  await writeText(path.join(root, ".pi/skills/shared/skills.md"), "Shared pilot skill\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/brand/skills.md"), "Brand pilot skill\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/guideline/skills.md"), "Guideline pilot skill\n");
-  await writeText(path.join(root, ".pi/skills/workstreams/pricing/skills.md"), "Pricing pilot skill\n");
 
   await createAgentScaffold(root, "generalist", {
     role: "generalist",
@@ -1408,12 +1514,12 @@ Shared pilot context.
   await createAgentScaffold(root, "brand", {
     description: "Brand pilot specialist.",
     docs: ["docs/workstreams/brand/"],
-    skills: [".pi/skills/workstreams/brand/"],
+    skills: ["brand-skill"],
   });
   await createAgentScaffold(root, "guideline", {
     description: "Guideline pilot reviewer.",
     docs: ["docs/workstreams/guideline/"],
-    skills: [".pi/skills/workstreams/guideline/"],
+    skills: ["guideline-skill"],
   });
 
   const doctor = await runDoctor(root, {
@@ -1429,7 +1535,7 @@ Shared pilot context.
   assert.match(list, /generalist - generalist \(primary\)/);
   assert.match(list, /brand - specialist/);
   assert.match(list, /docs: docs\/workstreams\/brand\//);
-  assert.match(list, /skills: \.pi\/skills\/workstreams\/brand\//);
+  assert.match(list, /skills: brand-skill/);
   assert.doesNotMatch(list, /launch/i);
 
   const directLaunch = await resolveAgentLaunchRequest(root, "brand", {
@@ -1437,6 +1543,8 @@ Shared pilot context.
   });
   assert.equal(directLaunch.subagentParams.agent, "brand");
   assert.equal(directLaunch.subagentParams.context, "fresh");
+  assert.deepEqual(directLaunch.subagentParams.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
+  assert.deepEqual(directLaunch.subagentParams.skill, ["shared-skill", "brand-skill"]);
   assert.match(directLaunch.subagentParams.task, /Tool: subagent/);
   assert.match(directLaunch.subagentParams.task, /Known personas:/);
 
@@ -1448,6 +1556,8 @@ Shared pilot context.
   });
   assert.equal(consult.subagentParams.agent, "guideline");
   assert.equal(consult.subagentParams.context, "fresh");
+  assert.deepEqual(consult.subagentParams.reads, ["docs/shared/company.md", "docs/workstreams/guideline/rules.md"]);
+  assert.deepEqual(consult.subagentParams.skill, ["shared-skill", "guideline-skill"]);
   assert.match(consult.subagentParams.task, /summary: The brand specialist is checking pilot copy\./);
 
   const roundtable = await resolveRoundtableLaunchRequest(root, {
@@ -1460,7 +1570,7 @@ Shared pilot context.
   await createAgentScaffold(root, "pricing", {
     description: "Pricing pilot specialist.",
     docs: ["docs/workstreams/pricing/"],
-    skills: [".pi/skills/workstreams/pricing/"],
+    skills: ["pricing-skill"],
   });
 
   const expandedProject = await discoverPersonaProject(root);

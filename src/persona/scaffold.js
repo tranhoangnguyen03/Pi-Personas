@@ -43,7 +43,8 @@ skills:${skills ? ` ${skills}` : ""}
 You are ${agentName}.
 
 Help with requests that match your role. Use the shared baseline plus any docs
-and skills declared in this agent file as your main operating breadcrumbs.
+declared in this agent file. Any skills declared here are native pi-subagents
+skill names, not file paths.
 `;
 }
 

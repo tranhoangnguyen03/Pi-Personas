@@ -7,8 +7,8 @@ The extension turns Pi's existing coding-agent scaffold into a role-aware
 workspace system. It does not replace Pi's session model, subagent runtime, tool
 registry, permissions, plugin conventions, skill loading, or filesystem
 behavior. It adds a thin semantic layer that assembles named role sessions from
-project-level `pi-subagents` agent files, workspace docs, skill breadcrumbs, and
-the available Pi runtime.
+project-level `pi-subagents` agent files, workspace docs, native
+`pi-subagents` skills, and the available Pi runtime.
 
 The intended product shape is an 80/20 base:
 
@@ -50,8 +50,11 @@ Required dependencies own:
 
 Pi Persona Agents owns:
 
-- Agent file schema.
+- Persona schema.
+- Roles: `generalist`, `specialist`, and `runtime`.
+- Primary generalist semantics.
 - Baseline-plus-agent awareness assembly.
+- Docs semantics and progressive docs discovery.
 - Command routing from persona commands to `pi-subagents` runs.
 - Consult and round-table semantics.
 - Validation and setup feedback for declared docs, skills, and agent references.
@@ -62,6 +65,11 @@ tool runtime, or session store. Pi remains the platform; `pi-subagents` and
 `pi-intercom` are the runtime substrate; pi-persona is the role-awareness and
 workflow layer on top.
 
+`pi-subagents` owns child execution, native tools, native skills,
+`reads`/`defaultReads` transport, context mode, and runtime frontmatter fields.
+Pi Persona compiles its semantic intent into those native runtime fields rather
+than replacing them.
+
 ---
 
 ## 2. Design Goals
@@ -71,12 +79,12 @@ workflow layer on top.
 - **No reinvented runtime.** Use required `pi-subagents` and `pi-intercom`
   mechanisms instead of building parallel child-session or communication
   machinery.
-- **User-customizable.** Users can define agents, deploy docs, and provide skill
-  breadcrumbs without editing extension internals.
+- **User-customizable.** Users can define agents, deploy docs, and select native
+  `pi-subagents` skills without editing extension internals.
 - **Named personas.** Users can launch role-specific Pi sessions by name.
-- **Real awareness inputs.** Each agent receives the shared docs and skills plus
-  the persona-specific docs and skills assembled for that session by the
-  resolver. These are context hints, not permission boundaries.
+- **Real awareness inputs.** Each agent receives doc read paths assembled by
+  Pi Persona plus native `pi-subagents` skills selected by baseline and persona
+  metadata. These are operating-context hints, not permission boundaries.
 - **Two-tier awareness.** Shared baseline foundation plus additive per-agent
   specialization.
 - **Clean handoff.** One agent launch creates one role-aware `pi-subagents` run or
@@ -102,7 +110,7 @@ Four moving parts:
 
 1. **Agent files** - `.pi/agents/**/*.md`, compatible with project-level
    `pi-subagents` agent discovery, with pi-persona fields layered on top.
-2. **Shared baseline** - `_baseline.md` plus shared docs and shared skills,
+2. **Shared baseline** - `_baseline.md` plus shared docs and native skill names,
    merged into every agent session.
 3. **Resolver** - generic assembly logic written once.
 4. **Orchestrator** - the primary generalist running consults and round-tables
@@ -115,20 +123,20 @@ new launcher implementation.
 ### Awareness, Not Restriction
 
 No pi-persona design should act as a permission boundary by default. The package
-is allowed to inform, nudge, preload, summarize, and railroad through useful
-breadcrumbs. It should not deny docs, tools, agents, or writes that Pi and the
-host environment would otherwise allow.
+is allowed to inform, nudge, assemble runtime fields, summarize, and guide the
+agent with useful context hints. It should not deny docs, tools, agents, or
+writes that Pi and the host environment would otherwise allow.
 
 This means:
 
-- All agents are aware of shared docs and shared skills from the baseline.
-- Specialists are additionally aware of their own docs and skills.
-- The generalist is aware of the agent roster, but is not preloaded with
-  specialist materials unless the user promotes those materials to the shared
-  foundation.
+- All agents receive shared docs and native skill names from the baseline.
+- Specialists additionally receive their own docs and native skill names.
+- The generalist is aware of the agent roster, but is not given specialist doc
+  read paths unless the user promotes those materials to the shared foundation.
 - All agents are aware that other agents exist, using names, roles, and
-  descriptions as consultation breadcrumbs.
-- Tool use is explained through `skills`; actual tool access remains Pi-owned.
+  descriptions as consultation hints.
+- Tool-use guidance is expressed through native `pi-subagents` skills; actual
+  tool access remains Pi-owned.
 - Friction is a necessary evil and must be justified by a concrete failure mode.
 
 ---
@@ -166,13 +174,19 @@ Runtime contract:
 - `pi-persona` should generate or maintain agent files that are valid
   `pi-subagents` project agents.
 - The pi-persona resolver decides persona semantics: baseline merge, docs,
-  role type, docs, skills, agent roster awareness, and round-table protocol.
+  role type, native skill selection, agent roster awareness, and round-table
+  protocol.
+- Pi Persona compiles `docs` into `pi-subagents` `reads` at launch time. Users
+  express document intent through `docs`, not `defaultReads`.
+- Pi Persona passes `skills` through as native `pi-subagents` skill names. It
+  does not define a separate skill-breadcrumb runtime.
 - `pi-subagents` executes the resolved child runs.
 - `pi-intercom` is used only for supervisor contact while a child is running,
   not as the ordinary result transport.
-- Pi Persona does not hard-enforce doc, skill, or tool boundaries. Pi and the
-  host filesystem own access. Pi Persona injects information breadcrumbs that
-  nudge the agent toward the intended operating context.
+- Pi Persona does not hard-enforce doc, skill, or tool boundaries. Pi,
+  `pi-subagents`, and the host filesystem own access. Pi Persona provides
+  semantic routing and setup guidance that nudge the agent toward the intended
+  operating context.
 
 Non-goal: building a second agent platform beside Pi. DRY, SOC, and KISS apply:
 reuse proven `pi-subagents` and `pi-intercom` mechanisms, keep pi-persona as a
@@ -197,16 +211,6 @@ higher-value semantic layer, and avoid duplicate runtime machinery.
       worker.md               # copied/adapted pi-subagents builtin, package: runtime
       reviewer.md             # copied/adapted pi-subagents builtin, package: runtime
       oracle.md               # copied/adapted pi-subagents builtin, package: runtime
-  skills/
-    shared/
-      skills.md               # shared tool-use and workflow breadcrumbs
-    workstreams/
-      brand/
-        skills.md             # brand-specific tool-use breadcrumbs
-      launch/
-        skills.md
-    agent-authoring/          # conversational agent creation/editing
-
 docs/
   shared/                     # universal reference docs
     company-voice.md
@@ -234,12 +238,13 @@ experimentation, but committed project behavior should not depend on machine-
 specific npm package paths.
 
 **Awareness rule:** a doc or skill becomes shared by living in `_baseline.md`,
-`docs/shared/`, or `.pi/skills/shared/`. A specialist becomes specialized by
-declaring its own docs and skills. The generalist receives shared foundations
-and the agent roster, but it is not preloaded with specialist materials unless
-the user deliberately puts those materials in the shared foundation. This is a
-prompting and preload rule, not an access restriction; a Pi session can still
-discover files and tools through normal Pi permissions.
+`docs/shared/`, or the baseline `skills` list. A specialist becomes specialized
+by declaring its own docs and native `pi-subagents` skill names. The generalist
+receives shared foundations and the agent roster, but it is not given
+specialist document read paths unless the user deliberately puts those materials
+in the shared foundation. This is a prompting and runtime-field assembly rule,
+not an access restriction; a Pi session can still discover files and tools
+through normal Pi permissions.
 
 **Writes:** inherited from Pi and the host filesystem. The extension does not
 model per-agent write access by default.
@@ -264,7 +269,7 @@ role: specialist
 description: Defines positioning, voice, competitive framing.
 model: default
 docs: docs/workstreams/brand/
-skills: .pi/skills/workstreams/brand/
+skills: market-research, brand-review
 ---
 You are a brand strategist. You help define positioning, voice, and
 competitive framing for the user's products and workstreams.
@@ -293,7 +298,7 @@ synthesize the result. For round-tables, act as moderator.
 ---
 name: _baseline
 docs: docs/shared/
-skills: .pi/skills/shared/
+skills: safe-bash
 ---
 Shared operating principles and baseline instructions injected into every
 persona session.
@@ -310,10 +315,13 @@ Required fields for persona agents:
 Recommended user-facing fields:
 
 - `docs` - pi-persona doc paths relative to the workspace root. These inform
-  what should be preloaded or referenced; they do not restrict discovery.
-- `skills` - skill folders or files, usually folders containing `skills.md`,
-  that explain tool availability, tool use, workflows, and specialist habits.
-  These inform the agent; they do not grant or deny tool access.
+  what should be provided as `pi-subagents` `reads`; they do not restrict
+  discovery. File paths are exact read paths. Directory paths use progressive
+  discovery: only first-layer files, especially `_index.md`, are included in
+  `reads` by default.
+- `skills` - native `pi-subagents` skill names, such as `safe-bash` or
+  `chrome-devtools`. These select skills in the runtime substrate; they are not
+  file paths and pi-persona does not define a separate skill-breadcrumb layer.
 
 Control and runtime files:
 
@@ -327,13 +335,16 @@ Control and runtime files:
 Adapter-derived runtime fields:
 
 - `docs` is the authoritative user-facing doc field.
-- `skills` is the authoritative user-facing skill-awareness field.
-- The resolver derives `pi-subagents` preload fields such as `defaultReads` from
+- `skills` is the native `pi-subagents` skill-name field.
+- The resolver derives `pi-subagents` runtime read fields such as `reads` or
+  `defaultReads` from
   `docs`; users should not maintain both. If a declared doc path is a directory,
-  the resolver expands it into concrete workspace file paths for runtime reads
-  and includes a resolved-file manifest in the child prompt.
-- The resolver loads or references declared skill folders, especially
-  `skills.md`, as instructions and breadcrumbs. It must not translate `skills`
+  the resolver expands only first-layer files, with `_index.md` first when
+  present, into concrete workspace file paths for runtime reads. Nested files
+  are deliberately deferred and surfaced as progressive-discovery material in
+  the child prompt.
+- The resolver passes `skills` through as native `pi-subagents` skills. It must
+  not expand skill folders into reads, inject `skills.md`, or translate `skills`
   into a tool allowlist.
 - Runtime details such as `systemPromptMode`, `inheritProjectContext`, and
   `inheritSkills` belong in the adapter defaults unless an advanced project
@@ -346,7 +357,7 @@ Legacy fields:
 
 - `tools` is deprecated in pi-persona metadata. Actual tool registration and
   permission remain Pi concerns; pi-persona should express tool-use guidance
-  through `skills`.
+  through native `pi-subagents` skills where appropriate.
 - `consults` is deprecated. Agents should learn who to consult from the roster
   of agent names and descriptions, not from an allowlist.
 - `tags` is optional legacy metadata. Prefer concise, high-signal
@@ -466,41 +477,67 @@ advanced runtime override.
 ### 7.2 Deploying Docs
 
 Docs should be ordinary workspace files. The extension should not require a
-separate knowledge-base product, special file format, or indexing step.
+separate knowledge-base product, special file format, or mandatory indexing
+step.
 
 Recommended pattern:
 
 - Put universal references in `docs/shared/`.
 - Put agent-specific references in `docs/workstreams/<domain>/`.
 - Reference those paths in `_baseline.md` or the relevant agent file.
+- Add `_index.md` to any docs directory that contains nested material.
 - Run `/persona doctor` to confirm paths exist and are readable by Pi.
 
 Document deployment is intentionally file-native. Users can use git, sync
 folders, shared drives, generated markdown, PDFs, or whatever Pi can already
 read. Pi Persona Agents only loads or references the paths declared in agent
-files. Directory paths are allowed in the user-facing schema; at launch time,
-Pi Persona expands them to concrete file paths so child sessions do not need to
-list directories.
+files.
+
+Directory paths use a progressive-discovery pattern:
+
+- The resolver includes only the first layer of files in the declared directory
+  in runtime reads.
+- `_index.md` is treated as the navigation catalogue and is ordered first when
+  present.
+- Nested files are not included recursively in runtime reads. The agent should
+  read `_index.md` first, then deliberately open deeper files only when the task
+  needs them.
+- The child prompt notes when nested files were deferred, so absence from
+  runtime reads is visible rather than mysterious.
+
+This keeps directory docs ergonomic without turning every workstream folder
+into an accidental context dump. It also matches how a human consultant would
+work: receive the folder brief or catalogue first, then pull precise files as
+needed.
+
+Indexing should stay boring and file-native. `/persona index <docs-dir>` writes
+or refreshes a managed catalogue block inside `<docs-dir>/_index.md` by crawling
+the tree. `/persona index --all` refreshes all declared doc directories. Human
+or agent-authored annotations should live outside the managed block and are
+preserved. Agentic summarization can be added later if users need richer
+catalogue notes; the baseline mechanism is deterministic tree crawl plus
+editable markdown.
 
 ### 7.3 Setting Up And Deploying Skills
 
-Skills are file-based instruction breadcrumbs. They make tools, workflows, and
-operating habits known to an agent. They do not define a new tool runtime and
-they do not restrict who may use a tool.
+Skills are native `pi-subagents` skills. Pi Persona does not create its own
+skill-breadcrumb system and does not treat skill entries as paths. Skills make
+workflows and tool-use habits available through the existing runtime substrate;
+they do not grant or deny tool access by themselves.
 
 Recommended pattern:
 
 - Install or enable real tools through Pi's normal ecosystem.
-- Put universal skill guidance in `.pi/skills/shared/skills.md`.
-- Put specialist skill guidance in `.pi/skills/workstreams/<domain>/skills.md`.
-- Reference the shared skill folder from `_baseline.md`.
-- Reference the specialist skill folder from the relevant specialist agent.
-- Run `/persona doctor` to catch missing skill folders or unreadable skill docs.
+- Use native `pi-subagents` skill names in `_baseline.md` for shared skills.
+- Use native `pi-subagents` skill names in specialist agent files for
+  specialist behavior.
+- Run `/persona doctor` to catch path-style skill misuse such as
+  `.pi/skills/workstreams/brand/`.
 
-If Pi supports project-local skills or plugins, the extension may provide a thin
-helper to link those skill folders into agent files. If Pi does not, tool setup
-remains external to pi-persona, and pi-persona only points agents at the
-instructions that explain how to use those tools.
+If Pi or `pi-subagents` supports project-local native skills, users should
+register those skills through the native package mechanism and reference them by
+name. Pi Persona should not index skill folders, inject `skills.md`, or maintain
+a second skill registry.
 
 ---
 
@@ -525,7 +562,8 @@ function assemble(agentName):
       skills,
       prompt,
       model,
-      defaultReads: runtime.defaultReads,
+      reads: runtime.reads,
+      skill: runtime.skills,
       systemPromptMode: runtime.systemPromptMode,
       inheritProjectContext: runtime.inheritProjectContext,
       inheritSkills: runtime.inheritSkills
@@ -538,6 +576,19 @@ The resolver is the single assembly machine for:
 - Primary generalist launch.
 - Specialist consult.
 - Round-table participant launch.
+
+For docs directories, `deriveSubagentRuntime` applies progressive discovery
+instead of recursive read expansion. It resolves:
+
+- top-level files in the declared directory;
+- `_index.md` first, when present;
+- a manifest note that nested files exist but were deliberately omitted from
+  `reads`.
+
+The agent can still read deeper files through normal Pi capabilities when the
+task calls for it. Pi Persona should not hide those files or create a new access
+control layer; it should simply avoid adding the entire tree to runtime reads by
+accident.
 - Agent validation previews.
 
 The resolver should be strict about file schema and path existence. It should be
@@ -546,9 +597,9 @@ guess the user's write permissions or tool permissions.
 
 The resolver owns awareness assembly. `pi-subagents` owns execution. A
 deliberate forked consult may carry requester conversation context, but it must
-not automatically preload requester docs or skills unless those are also part of
+not automatically inherit requester docs or skills unless those are also part of
 the consultant's own resolved awareness package. This is not a security claim;
-it is the intended prompt and preload shape.
+it is the intended prompt, read-path, and native-skill shape.
 
 ---
 
@@ -583,6 +634,12 @@ Lists the primary generalist, any non-primary generalists, and all specialists.
 It is read-only and does not launch anything. The list should show each
 persona's role, primary status where relevant, description, docs, and skills.
 Users launch agents directly with `/<agent-name>`.
+
+### Docs Catalogue Helper: `/persona index [docs-dir]`
+
+Refreshes `_index.md` for one docs directory, or all declared docs directories
+when called with `--all` or no path. This is setup assistance only. It should
+not launch an agent and should not create a second docs system.
 
 Direct user launches create fresh sessions by default. Resume behavior uses Pi's
 native thread/session mechanism if available. Agent-to-agent consults also use
@@ -822,7 +879,9 @@ reliably:
 - `name` values are unique.
 - Exactly one primary generalist resolves for role-based routing.
 - Declared doc paths exist.
-- Declared skill paths exist and contain usable guidance, usually `skills.md`.
+- Declared doc directories with nested files have `_index.md` or receive a
+  warning that points to `/persona index`.
+- Declared skills look like native `pi-subagents` skill names, not file paths.
 - Launchable personas have the project runtime override needed for child-safe
   consult fanout, or a legacy-compatible `tools: subagent` declaration.
 - Legacy `tools`, `consults`, and `tags` fields are reported with migration
@@ -839,8 +898,8 @@ policy lectures.
 Examples:
 
 - `brand-strategist: docs/workstreams/brand/ does not exist`
-- `brand-strategist: .pi/skills/workstreams/brand/ exists but no skills.md was found`
-- `brand-strategist: legacy field tools found; migrate tool-use guidance to skills`
+- `brand-strategist: skills entry looks like a path, but Pi Persona skills are native pi-subagents skill names: .pi/skills/workstreams/brand/`
+- `brand-strategist: legacy field tools found; migrate tool-use guidance to native pi-subagents skills`
 - `doctor: multiple primary generalist agents: generalist, backup-generalist`
 - `doctor: found 0 primary generalists among 2 generalists`
 - `runtime.worker: copied from pi-subagents 0.31.0; installed builtin changed`
@@ -893,7 +952,10 @@ a valid file. The user can iterate.
 12. **Round-table.** Add Delphi-style multi-specialist discourse through
     parallel `pi-subagents` runs.
 13. **Persona list.** Add read-only `/persona-list`.
-14. **Initial agent port.** Port the user's initial agent set into the
+14. **Progressive docs discovery.** Include shallow directory docs in reads,
+    support
+    `_index.md`, and provide `/persona index` for managed catalogue refresh.
+15. **Initial agent port.** Port the user's initial agent set into the
     project-level format. Generic sample agents can be extracted later for
     documentation and onboarding.
 
@@ -901,7 +963,8 @@ Steps 1-8 prove the runtime-backed role-aware file model.
 Steps 9-10 make the system user-customizable.
 Steps 11-12 add multi-agent leverage.
 Step 13 improves discovery ergonomics.
-Step 14 makes the user's initial operating layer real.
+Step 14 reduces directory-doc runtime friction.
+Step 15 makes the user's initial operating layer real.
 
 ---
 
@@ -916,8 +979,9 @@ Step 14 makes the user's initial operating layer real.
 | User customization | 80% generic base, 20% user-defined agents/docs/skills |
 | Agent definition | Project-level `pi-subagents` markdown files with pi-persona metadata |
 | Runtime support roles | Copy/adapt builtins locally with provenance; symlinks only for local experiments |
-| Skill setup | File-based skill breadcrumbs; actual tool access remains Pi-owned |
+| Skill setup | Native `pi-subagents` skills; no custom Pi Persona skill-breadcrumb layer |
 | Doc setup | Workspace files referenced by path |
+| Docs transport | Pi Persona `docs` compiles to `pi-subagents` `reads` |
 | Direct launch | Fresh session; resume through Pi if available |
 | Persona discovery | `/persona-list` is read-only; launch with `/<agent-name>` |
 | Consult context | Summarized/fresh context by default; requester-context fork is deliberate |
@@ -933,7 +997,7 @@ Step 14 makes the user's initial operating layer real.
 | Supervisor bridge | `pi-intercom/contact_supervisor` only for blocked or plan-changing updates |
 | Routing | Simple first; optimize only after user-reported misses |
 | Validation | Cheap structural checks through `/persona doctor` |
-| Restriction policy | Inform and nudge through breadcrumbs; do not create a permission system |
+| Restriction policy | Inform and nudge through semantic context; do not create a permission system |
 
 ---
 
@@ -954,10 +1018,10 @@ actionable error.
 Create a valid `.pi/agents/<name>.md` persona file. Pass: `pi-subagents`
 discovers it as a project-level agent, while `_baseline.md` is not launchable.
 
-**Test 1.3 - Skill discovery.**
-Reference one valid skill folder and one missing skill folder. Run
-`/persona doctor`. Pass: the valid skill folder is recognized; the missing
-folder gets actionable setup feedback without implying tool authorization.
+**Test 1.3 - Native skill boundary.**
+Reference native skill names and one path-style skill entry. Run
+`/persona doctor`. Pass: native names are accepted as runtime skill names, while
+path-style entries get actionable guidance to use native `pi-subagents` skills.
 
 **Test 1.4 - Permission inheritance.**
 Attempt writes through a persona session using normal Pi permissions. Pass:
@@ -975,18 +1039,20 @@ Create a valid agent and malformed variants. Pass: valid file passes; malformed
 files get specific errors without breaking `pi-subagents` compatibility.
 
 **Test 2.2 - Baseline merge.**
-Create a minimal specialist with one additive skill folder and one additive doc
-dir. Pass: assembled awareness includes baseline plus specialist declarations.
+Create a minimal specialist with one additive native skill name and one additive
+doc dir. Pass: assembled runtime includes baseline plus specialist docs and
+native skill names.
 
 **Test 2.3 - No accidental specialist material.**
-Assemble two specialists. Pass: the resolver loads only baseline docs and the
-selected specialist's declared docs and skills.
+Assemble two specialists. Pass: the resolver emits only baseline docs plus the
+selected specialist's declared docs as `reads`, and emits only baseline plus
+selected specialist native skill names as `skill`.
 
 ### Phase 3 - User Setup Path
 
 **Test 3.1 - Conversational agent creation.**
 Ask Pi to create a new specialist for a concrete workstream. Pass: a valid
-`.pi/agents/<name>.md` file is created with description, docs, skills, and
+`.pi/agents/<name>.md` file is created with description, docs, native skills, and
 body.
 
 **Test 3.2 - Minimal scaffold.**
@@ -997,16 +1063,28 @@ prompt body; runtime adapter fields are omitted.
 Add a file under `docs/workstreams/<domain>/`, reference it from an agent, and
 run `/persona doctor`. Pass: the path validates and appears in resolver preview.
 
-**Test 3.4 - Skill deployment.**
-Add `.pi/skills/workstreams/<domain>/skills.md`, reference the folder from an
-agent, and run `/persona doctor`. Pass: the skill folder resolves and is
-included in the launch instructions.
+**Test 3.3a - Progressive docs catalogue.**
+Add a nested file under a declared docs directory with no `_index.md`. Pass:
+`/persona doctor` warns without blocking. Run `/persona index <docs-dir>`.
+Pass: `_index.md` is created or refreshed, handwritten notes outside the managed
+block are preserved, and the warning clears.
+
+**Test 3.4 - Native skill selection.**
+Reference a native skill name from an agent and run `/persona doctor`. Pass: no
+path warning appears, and launch/consult/round-table requests pass the skill
+name through to `pi-subagents` as native skill selection.
 
 ### Phase 4 - Direct Launch
 
 **Test 4.1 - Specialist command.**
 Invoke `/<specialist-name>`. Pass: a fresh role-aware Pi session starts with the
-agent prompt and declared docs/skills.
+agent prompt, doc-derived `reads`, and native skill names.
+
+**Test 4.1a - Directory docs are shallow by default.**
+Declare a docs directory containing `_index.md`, a first-layer file, and a
+nested file. Pass: the child run receives `_index.md` and the first-layer file
+as runtime reads, does not include the nested file in reads, and the prompt
+states that nested docs are available through progressive discovery.
 
 **Test 4.2 - Fresh session default.**
 Launch the same specialist twice. Pass: the second launch does not inherit
@@ -1043,8 +1121,8 @@ pi-persona uses the native baseline unless a real gap is identified.
 
 **Test 5.2d - Awareness package does not fork.**
 Give the requester a specialist-only doc or skill not declared by the
-consultant. Pass: the consultant is preloaded with the consultant's own
-docs/skills, not the requester's specialist-only breadcrumbs.
+consultant. Pass: the consultant receives the consultant's own doc reads and
+native skills, not the requester's specialist-only context hints.
 
 **Test 5.2e - Forked context envelope option.**
 Trigger a consult where the requester chooses `context: fork` in the envelope.
@@ -1140,8 +1218,6 @@ These are implementation questions, not product blockers:
   project agents?
 - Should copied runtime support roles use `package: runtime`, another package
   name, or project-specific names?
-- Can Pi or `pi-subagents` preload skill folders cleanly, or should pi-persona
-  inject `skills.md` content into child prompts?
 - How does Pi summarize session context, and what summary length/artifact
   behavior should pi-persona inherit before adding its own rules?
 - Can Pi expose registered tool names for informational skill authoring without

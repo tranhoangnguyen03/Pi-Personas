@@ -5,6 +5,12 @@ export {
   formatConsultSubagentInstructions,
   resolveConsultLaunchRequest,
 } from "./consult.js";
+export {
+  createDocsIndex,
+  formatDocsIndexReport,
+  inspectDocPath,
+  parsePersonaIndexArgs,
+} from "./doc-index.js";
 export { discoverPersonaProject } from "./agents.js";
 export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";

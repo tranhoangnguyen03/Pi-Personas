@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,6 +9,7 @@ import {
   pathExists,
   resolveWorkspacePath,
 } from "./agents.js";
+import { inspectDocPath } from "./doc-index.js";
 import { validatePersonaSchema } from "./schema.js";
 import { hasNestedConsultRuntimeOverride, readProjectSettings } from "./settings.js";
 
@@ -23,7 +24,7 @@ export async function runDoctor(root, options = {}) {
   collectDuplicateNameIssues(project, issues);
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
-  await collectSkillsIssues(project, issues);
+  collectSkillsIssues(project, issues);
   await collectNestedConsultRuntimeIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
 
@@ -188,57 +189,46 @@ async function collectDocsIssues(project, issues) {
         file: entry.owner,
         message: `${entry.owner}: docs path does not exist: ${entry.docPath}`,
       });
+      continue;
+    }
+
+    const inspection = await inspectDocPath(project.root, entry.docPath);
+    if (inspection.type === "directory" && inspection.deferred.length > 0 && !inspection.indexFile) {
+      issues.push({
+        severity: "warning",
+        file: entry.owner,
+        message: `${entry.owner}: ${entry.docPath} has ${inspection.deferred.length} nested docs but no _index.md; run /persona index ${entry.docPath} or add an index manually for progressive discovery`,
+      });
     }
   }
 }
 
-async function collectSkillsIssues(project, issues) {
+function collectSkillsIssues(project, issues) {
   const skillEntries = [];
   if (project.baseline) {
-    for (const skillPath of project.baseline.frontmatter.skills ?? []) {
-      skillEntries.push({ owner: project.baseline.relativePath, skillPath });
+    for (const skill of project.baseline.frontmatter.skills ?? []) {
+      skillEntries.push({ owner: project.baseline.relativePath, skill });
     }
   }
   for (const agent of project.agents) {
-    for (const skillPath of agent.skills) {
-      skillEntries.push({ owner: agent.relativePath, skillPath });
+    for (const skill of agent.skills) {
+      skillEntries.push({ owner: agent.relativePath, skill });
     }
   }
 
   for (const entry of skillEntries) {
-    const resolved = resolveWorkspacePath(project.root, entry.skillPath);
-    if (!resolved.ok) {
-      issues.push({
-        severity: "error",
-        file: entry.owner,
-        message: `${entry.owner}: skills path must stay inside workspace: ${entry.skillPath}`,
-      });
-      continue;
-    }
-
-    let skillStat;
-    try {
-      skillStat = await stat(resolved.path);
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        issues.push({
-          severity: "warning",
-          file: entry.owner,
-          message: `${entry.owner}: skills path does not exist: ${entry.skillPath}`,
-        });
-        continue;
-      }
-      throw error;
-    }
-
-    if (skillStat.isDirectory() && !await pathExists(project.root, path.posix.join(entry.skillPath, "skills.md"))) {
+    if (looksLikePath(entry.skill)) {
       issues.push({
         severity: "warning",
         file: entry.owner,
-        message: `${entry.owner}: ${entry.skillPath} exists but no skills.md was found`,
+        message: `${entry.owner}: skills entry looks like a path, but Pi Persona skills are native pi-subagents skill names: ${entry.skill}`,
       });
     }
   }
+}
+
+function looksLikePath(value) {
+  return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
 }
 
 function collectLegacyMetadataIssues(project, issues) {
@@ -272,7 +262,7 @@ async function collectNestedConsultRuntimeIssues(project, issues) {
 function legacyGuidance(field) {
   switch (field) {
     case "tools":
-      return "migrate tool-use guidance to skills";
+      return "migrate tool-use guidance to native pi-subagents skills";
     case "consults":
       return "route by agent descriptions instead";
     case "tags":
