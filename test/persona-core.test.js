@@ -1692,9 +1692,16 @@ test("manifest init plans applies and reports status for a starter layer", async
 
   const status = await statusPersonaInitFromManifest(root, "init-data/business.yaml");
   assert.equal(status.mode, "status");
-  assert.ok(status.items.every((item) => item.state === "done"));
   assert.match(formatPersonaInitManifestReport(status), /\[done\] \.pi\/agents\/operator\.md/);
-  assert.match(formatPersonaInitManifestReport(status), /\[next\] run \/persona doctor/);
+  assert.match(formatPersonaInitManifestReport(status), /\[todo\] docs index: docs\/shared\//);
+  assert.match(formatPersonaInitManifestReport(status), /\[todo\] docs index: docs\/workstreams\/operator\//);
+  assert.match(formatPersonaInitManifestReport(status), /\[next\] run \/persona index --all/);
+
+  await createDocsIndex(root, { all: true });
+  const indexedStatus = await statusPersonaInitFromManifest(root, "init-data/business.yaml");
+  assert.ok(indexedStatus.items.every((item) => item.state === "done"));
+  assert.match(formatPersonaInitManifestReport(indexedStatus), /\[done\] docs index: docs\/shared\//);
+  assert.match(formatPersonaInitManifestReport(indexedStatus), /\[next\] run \/persona doctor/);
 });
 
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {

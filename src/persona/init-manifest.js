@@ -3,6 +3,7 @@ import path from "node:path";
 import { parseDocument } from "yaml";
 
 import { resolveWorkspacePath } from "./agents.js";
+import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
 import { ensureNestedConsultRuntimeOverride, readProjectSettings } from "./settings.js";
@@ -114,6 +115,7 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
       label: `runtime override: ${entry.agent}`,
     });
   }
+  items.push(...await docsIndexStatusItems(root, manifest));
 
   return {
     mode: "status",
@@ -188,8 +190,15 @@ function formatStatusReport(result) {
   for (const item of result.items) {
     lines.push(`[${item.state}] ${item.label}`);
   }
-  lines.push("", "[next] run /persona doctor");
+  lines.push("", `[next] run ${nextStatusCommand(result.items)}`);
   return lines.join("\n");
+}
+
+function nextStatusCommand(items) {
+  if (items.some((item) => item.state !== "done" && item.label.startsWith("docs index: "))) {
+    return "/persona index --all";
+  }
+  return "/persona doctor";
 }
 
 function baseResult(mode, manifest, actions) {
@@ -264,6 +273,35 @@ agents:
       You are the example specialist. Replace this with the specialist's role,
       operating style, and expected output shape.
 `;
+}
+
+async function docsIndexStatusItems(root, manifest) {
+  const docDirs = uniqueStrings([
+    ...manifest.baseline.docs,
+    ...manifest.agents.flatMap((agent) => agent.docs),
+  ]).filter((docPath) => docPath.endsWith("/"));
+
+  const items = [];
+  for (const docPath of docDirs) {
+    items.push({
+      state: await hasManagedDocIndex(root, docPath) ? "done" : "todo",
+      label: `docs index: ${docPath}`,
+    });
+  }
+  return items;
+}
+
+async function hasManagedDocIndex(root, docPath) {
+  const indexPath = `${docPath.replace(/\/+$/g, "")}/${DOC_INDEX_FILE}`;
+  const resolved = resolveWorkspacePath(root, indexPath);
+  if (!resolved.ok) return false;
+  try {
+    const content = await readFile(resolved.path, "utf8");
+    return content.includes(DOC_INDEX_BLOCK_START);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function readManifest(root, sourcePath) {
