@@ -8,6 +8,7 @@ import {
   buildAgentLaunchRequest,
   buildConsultEnvelope,
   createDocsIndex,
+  createPersonaInitDraft,
   createPersonaProjectScaffold,
   discoverPersonaProject,
   createAgentScaffold,
@@ -198,6 +199,7 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /formatAgentScaffoldCreatedMessage/);
   assert.match(source, /createPersonaProjectScaffold/);
   assert.match(source, /planPersonaInitFromManifest/);
+  assert.match(source, /createPersonaInitDraft/);
   assert.match(source, /createDocsIndex/);
 });
 
@@ -1585,6 +1587,14 @@ test("formatPersonaProjectScaffoldCreatedMessage gives init next steps", async (
 
 test("parsePersonaInitArgs handles basic plan apply and status modes", () => {
   assert.deepEqual(parsePersonaInitArgs(""), { mode: "basic" });
+  assert.deepEqual(parsePersonaInitArgs("draft --out init-data/business.yaml"), {
+    mode: "draft",
+    out: "init-data/business.yaml",
+  });
+  assert.deepEqual(parsePersonaInitArgs("draft --out=init-data/business.yaml"), {
+    mode: "draft",
+    out: "init-data/business.yaml",
+  });
   assert.deepEqual(parsePersonaInitArgs("--plan --from init-data/business.yaml"), {
     mode: "plan",
     from: "init-data/business.yaml",
@@ -1603,8 +1613,36 @@ test("parsePersonaInitArgs handles basic plan apply and status modes", () => {
     /missing --from/,
   );
   assert.throws(
-    () => parsePersonaInitArgs("draft --out init-data/business.yaml"),
-    /\/persona init draft is not implemented yet/,
+    () => parsePersonaInitArgs("draft"),
+    /missing --out/,
+  );
+});
+
+test("persona init draft writes a valid starter manifest without overwriting", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-draft-init-"));
+
+  const result = await createPersonaInitDraft(root, "init-data/my-business.yaml");
+
+  assert.equal(result.mode, "draft");
+  assert.equal(result.source, "init-data/my-business.yaml");
+  assert.equal(result.projectName, "my-business");
+
+  const draft = await readFile(path.join(root, "init-data/my-business.yaml"), "utf8");
+  assert.match(draft, /version: 1/);
+  assert.match(draft, /name: generalist/);
+  assert.match(draft, /primary: true/);
+  assert.match(draft, /name: example-specialist/);
+  assert.match(draft, /docs\/shared\/_index\.md/);
+
+  const plan = await planPersonaInitFromManifest(root, "init-data/my-business.yaml");
+  assert.equal(plan.projectName, "my-business");
+  assert.ok(plan.actions.some((action) => action.path === ".pi/agents/generalist.md"));
+  assert.match(formatPersonaInitManifestReport(result), /Pi Persona Init Draft/);
+  assert.match(formatPersonaInitManifestReport(result), /\/persona init --plan --from init-data\/my-business\.yaml/);
+
+  await assert.rejects(
+    () => createPersonaInitDraft(root, "init-data/my-business.yaml"),
+    /draft manifest already exists: init-data\/my-business\.yaml/,
   );
 });
 

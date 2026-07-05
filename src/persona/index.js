@@ -16,6 +16,7 @@ export { formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
 export {
   applyPersonaInitFromManifest,
+  createPersonaInitDraft,
   formatPersonaInitManifestReport,
   parsePersonaInitArgs,
   planPersonaInitFromManifest,

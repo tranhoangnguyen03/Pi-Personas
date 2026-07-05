@@ -436,9 +436,10 @@ Manifest-backed init is the richer setup layer. The target flow is:
 
 The split is deliberate:
 
-- `/persona init draft` is the planned optional agentic authoring aid. It
-  interviews the user, proposes agents/docs/native skill names, and writes or
-  revises a YAML manifest for human review.
+- `/persona init draft` writes a starter YAML manifest. The agentic authoring
+  aid is optional and happens against that manifest: the user can ask Pi to
+  revise the YAML, propose agents/docs/native skill names, and then review the
+  file before applying it.
 - `/persona init --from <file>` is mechanical. It parses YAML, validates it,
   writes files, preserves existing content unless an explicit overwrite mode is
   added, updates runtime overrides, and makes no creative decisions.
@@ -740,7 +741,8 @@ and leaves real specialist content to the user.
 
 Manifest-backed variants support richer setup:
 
-- `/persona init draft --out <file>` for planned optional agentic YAML authoring.
+- `/persona init draft --out <file>` for a starter manifest that can be edited
+  directly or revised with optional agentic help.
 - `/persona init --plan --from <file>` for a dry-run checklist.
 - `/persona init --from <file>` for deterministic file creation.
 - `/persona init status --from <file>` for progress and next-step reporting.

@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import {
   createAgentScaffold,
   createDocsIndex,
+  createPersonaInitDraft,
   createPersonaProjectScaffold,
   applyPersonaInitFromManifest,
   discoverPersonaProject,
@@ -166,6 +167,11 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
             return;
           }
+          if (parsed.mode === "draft") {
+            const result = await createPersonaInitDraft(ctx.cwd, parsed.out);
+            sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
+            return;
+          }
           if (parsed.mode === "plan") {
             const result = await planPersonaInitFromManifest(ctx.cwd, parsed.from);
             sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
@@ -301,6 +307,7 @@ function normalizeCommandText(value: string): string {
 function personaUsage(): string {
   return [
     "Usage: /persona init",
+    "Usage: /persona init draft --out <file>",
     "Usage: /persona init --plan --from <file>",
     "Usage: /persona init --from <file>",
     "Usage: /persona init status --from <file>",

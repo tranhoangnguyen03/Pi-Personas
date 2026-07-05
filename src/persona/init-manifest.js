@@ -13,7 +13,9 @@ export function parsePersonaInitArgs(args) {
   const tokens = tokenizeArgs(args);
   if (tokens.length === 0) return { mode: "basic" };
   if (tokens[0] === "draft") {
-    throw new Error("/persona init draft is not implemented yet; create or edit the YAML manifest manually, then run /persona init --from <file>");
+    const out = readOption(tokens.slice(1), "out");
+    if (!out) throw new Error("missing --out <file> for /persona init draft");
+    return { mode: "draft", out };
   }
 
   const status = tokens[0] === "status";
@@ -26,6 +28,26 @@ export function parsePersonaInitArgs(args) {
   return {
     mode: status ? "status" : plan ? "plan" : "apply",
     from,
+  };
+}
+
+export async function createPersonaInitDraft(root, outPath) {
+  const resolved = resolveWorkspacePath(root, outPath);
+  if (!resolved.ok) throw new Error(`draft path must stay inside workspace: ${outPath}`);
+
+  const projectName = projectNameFromOutputPath(outPath);
+  await mkdir(path.dirname(resolved.path), { recursive: true });
+  try {
+    await writeFile(resolved.path, renderStarterManifest(projectName), { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code === "EEXIST") throw new Error(`draft manifest already exists: ${outPath}`);
+    throw error;
+  }
+
+  return {
+    mode: "draft",
+    source: outPath,
+    projectName,
   };
 }
 
@@ -102,6 +124,7 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
 }
 
 export function formatPersonaInitManifestReport(result) {
+  if (result.mode === "draft") return formatDraftReport(result);
   if (result.mode === "status") return formatStatusReport(result);
   const title = result.mode === "apply" ? "Pi Persona Init Applied" : "Pi Persona Init Plan";
   const lines = [
@@ -141,6 +164,19 @@ export function formatPersonaInitManifestReport(result) {
   return lines.join("\n");
 }
 
+function formatDraftReport(result) {
+  return [
+    "# Pi Persona Init Draft",
+    "",
+    `Created: ${result.source}`,
+    `Project: ${result.projectName}`,
+    "",
+    "Review or edit the YAML before applying it. Agentic authoring stays optional: ask Pi to revise this manifest if you want help shaping the personas.",
+    "",
+    `Next: run /persona init --plan --from ${result.source}`,
+  ].join("\n");
+}
+
 function formatStatusReport(result) {
   const lines = [
     "# Pi Persona Init Status",
@@ -163,6 +199,71 @@ function baseResult(mode, manifest, actions) {
     projectName: manifest.projectName,
     actions,
   };
+}
+
+function projectNameFromOutputPath(outPath) {
+  const baseName = path.basename(outPath).replace(/\.ya?ml$/i, "");
+  return normalizeAgentName(baseName) || "business-operating-layer";
+}
+
+function renderStarterManifest(projectName) {
+  return `version: 1
+project:
+  name: ${projectName}
+
+baseline:
+  docs:
+    - docs/shared/
+  skills: []
+  prompt: |
+    Shared operating context for every persona.
+
+    Keep answers practical, concise, and grounded in the available docs. Answer
+    directly when shared context is enough. Consult specialists when the request
+    clearly needs their perspective.
+
+docs:
+  files:
+    docs/shared/_index.md: |
+      # Shared Docs Index
+
+      - business-context.md: facts, priorities, constraints, and open questions.
+    docs/shared/business-context.md: |
+      # Business Context
+
+      Add the user's business facts, priorities, constraints, audience,
+      products, services, channels, and recurring decisions here.
+    docs/workstreams/example-specialist/_index.md: |
+      # Example Specialist Docs Index
+
+      - brief.md: scope and output expectations.
+    docs/workstreams/example-specialist/brief.md: |
+      # Example Specialist Brief
+
+      Replace this with the specialist's operating notes.
+
+agents:
+  - name: generalist
+    role: generalist
+    primary: true
+    description: Routes requests, answers directly, and synthesizes specialist input.
+    docs: []
+    skills: []
+    prompt: |
+      You are the operating generalist. Answer directly when shared context is
+      enough. Consult the best-fit specialist when the request clearly needs a
+      specialist perspective.
+
+  - name: example-specialist
+    role: specialist
+    description: Replace with the specialist's routing description.
+    docs:
+      - docs/workstreams/example-specialist/
+    skills: []
+    prompt: |
+      You are the example specialist. Replace this with the specialist's role,
+      operating style, and expected output shape.
+`;
 }
 
 async function readManifest(root, sourcePath) {
