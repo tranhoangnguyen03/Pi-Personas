@@ -4,11 +4,13 @@ import { Type } from "typebox";
 import {
   createAgentScaffold,
   createDocsIndex,
+  createPersonaProjectScaffold,
   discoverPersonaProject,
   formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatDocsIndexReport,
   formatDoctorReport,
+  formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
@@ -136,7 +138,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("persona", {
-    description: "Pi Persona commands. Supports: /persona doctor, /persona new <name>, /persona index [docs-dir]",
+    description: "Pi Persona commands. Supports: /persona init, /persona doctor, /persona new <name>, /persona index [docs-dir]",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
@@ -146,6 +148,17 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         const report = formatDoctorReport(result);
         const level = result.status === "error" ? "error" : result.status === "warning" ? "warning" : "info";
         sendPersonaOutput(pi, ctx, report, level);
+        return;
+      }
+
+      if (subcommand === "init") {
+        try {
+          const result = await createPersonaProjectScaffold(ctx.cwd);
+          registerPersonaCommand(result.primaryGeneralist);
+          sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
+        } catch (error) {
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+        }
         return;
       }
 
@@ -264,6 +277,7 @@ function normalizeCommandText(value: string): string {
 
 function personaUsage(): string {
   return [
+    "Usage: /persona init",
     "Usage: /persona doctor",
     "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills native-skill[,native-skill]]",
     "Usage: /persona index [docs-dir]",

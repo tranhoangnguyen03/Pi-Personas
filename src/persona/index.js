@@ -24,7 +24,9 @@ export {
 export { buildScopedSubagentParams, buildScopedSubagentStep } from "./runtime.js";
 export {
   createAgentScaffold,
+  createPersonaProjectScaffold,
   formatAgentScaffoldCreatedMessage,
+  formatPersonaProjectScaffoldCreatedMessage,
   normalizeAgentName,
   parsePersonaNewArgs,
   renderAgentScaffold,

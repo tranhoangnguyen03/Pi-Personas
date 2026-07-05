@@ -140,6 +140,32 @@ export async function createAgentScaffold(root, rawName, options = {}) {
   };
 }
 
+export async function createPersonaProjectScaffold(root) {
+  const created = [];
+  const skipped = [];
+
+  await writeScaffoldFile(root, ".pi/agents/_baseline.md", renderBaselineScaffold(), created, skipped);
+  await writeScaffoldFile(
+    root,
+    ".pi/agents/generalist.md",
+    renderAgentScaffold("generalist", {
+      role: "generalist",
+      primary: true,
+      description: "Routes requests to the right specialist persona.",
+    }),
+    created,
+    skipped,
+  );
+  await writeScaffoldFile(root, "docs/shared/_index.md", renderSharedDocsIndexScaffold(), created, skipped);
+  await ensureNestedConsultRuntimeOverride(root, "generalist");
+
+  return {
+    created,
+    skipped,
+    primaryGeneralist: "generalist",
+  };
+}
+
 export function formatAgentScaffoldCreatedMessage(result) {
   const lines = [
     `Created ${result.relativePath}`,
@@ -167,6 +193,68 @@ export function formatAgentScaffoldCreatedMessage(result) {
   }
   lines.push("Next: run /persona doctor");
   return lines.join("\n");
+}
+
+export function formatPersonaProjectScaffoldCreatedMessage(result) {
+  const lines = [
+    "Initialized Pi Persona project",
+  ];
+
+  if (result.created.length > 0) {
+    lines.push("", "Created:");
+    for (const filePath of result.created) {
+      lines.push(`- ${filePath}`);
+    }
+  }
+  if (result.skipped.length > 0) {
+    lines.push("", "Preserved:");
+    for (const filePath of result.skipped) {
+      lines.push(`- ${filePath}`);
+    }
+  }
+
+  lines.push(
+    "",
+    `Primary generalist: /${result.primaryGeneralist}`,
+    "Next: add specialists with /persona new <name>, then run /persona doctor",
+  );
+  return lines.join("\n");
+}
+
+async function writeScaffoldFile(root, relativePath, content, created, skipped) {
+  const filePath = path.join(root, relativePath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+    created.push(relativePath);
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      skipped.push(relativePath);
+      return;
+    }
+    throw error;
+  }
+}
+
+function renderBaselineScaffold() {
+  return `---
+docs: docs/shared/
+skills:
+---
+Shared operating context for every Pi Persona agent.
+
+Use the agent roster to decide when specialist help is useful. Keep consults
+focused, summarize relevant context, and prefer fresh context unless full
+history is deliberately needed.
+`;
+}
+
+function renderSharedDocsIndexScaffold() {
+  return `# Shared Docs Index
+
+Add shared reference docs here. Keep this index current so agents can discover
+the folder progressively before opening deeper files.
+`;
 }
 
 async function defaultPrimaryForRole(root, role) {

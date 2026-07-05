@@ -8,12 +8,14 @@ import {
   buildAgentLaunchRequest,
   buildConsultEnvelope,
   createDocsIndex,
+  createPersonaProjectScaffold,
   discoverPersonaProject,
   createAgentScaffold,
   formatAgentScaffoldCreatedMessage,
   formatConsultSubagentInstructions,
   formatConsultProvenance,
   formatDocsIndexReport,
+  formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
   formatDoctorReport,
   formatRoundtableRosterPreview,
@@ -134,11 +136,13 @@ test("extension uses the persona command namespace instead of generic agent", as
 
   assert.match(source, /registerCommand\("persona"/);
   assert.doesNotMatch(source, /registerCommand\("agent"/);
+  assert.match(source, /\/persona init/);
   assert.match(source, /\/persona doctor/);
   assert.match(source, /\/persona index \[docs-dir\]/);
   assert.doesNotMatch(source, /\/agent doctor/);
   assert.match(source, /parsePersonaNewArgs/);
   assert.match(source, /formatAgentScaffoldCreatedMessage/);
+  assert.match(source, /createPersonaProjectScaffold/);
   assert.match(source, /createDocsIndex/);
 });
 
@@ -1456,6 +1460,72 @@ test("createAgentScaffold preserves same-agent runtime settings while adding sub
   const settings = await readJson(path.join(root, ".pi/settings.json"));
   assert.equal(settings.subagents.agentOverrides["market-research"].model, "openai/gpt-5-mini");
   assert.deepEqual(settings.subagents.agentOverrides["market-research"].tools, ["read", "subagent"]);
+});
+
+test("createPersonaProjectScaffold creates minimal baseline and primary generalist", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-init-"));
+
+  const result = await createPersonaProjectScaffold(root);
+
+  assert.deepEqual(result.created, [
+    ".pi/agents/_baseline.md",
+    ".pi/agents/generalist.md",
+    "docs/shared/_index.md",
+  ]);
+  assert.deepEqual(result.skipped, []);
+
+  const baseline = await readFile(path.join(root, ".pi/agents/_baseline.md"), "utf8");
+  const generalist = await readFile(path.join(root, ".pi/agents/generalist.md"), "utf8");
+  const sharedIndex = await readFile(path.join(root, "docs/shared/_index.md"), "utf8");
+  assert.match(baseline, /docs: docs\/shared\//);
+  assert.match(baseline, /skills:\n/);
+  assert.match(generalist, /role: generalist/);
+  assert.match(generalist, /primary: true/);
+  assert.match(sharedIndex, /# Shared Docs Index/);
+
+  const settings = await readJson(path.join(root, ".pi/settings.json"));
+  assert.deepEqual(settings.subagents.agentOverrides.generalist.tools, ["subagent"]);
+
+  const doctor = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
+    },
+  });
+  assert.equal(doctor.status, "pass");
+});
+
+test("createPersonaProjectScaffold preserves existing setup files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-init-existing-"));
+  await writeText(path.join(root, ".pi/agents/_baseline.md"), "existing baseline\n");
+  await writeText(path.join(root, "docs/shared/_index.md"), "existing index\n");
+
+  const result = await createPersonaProjectScaffold(root);
+
+  assert.deepEqual(result.created, [".pi/agents/generalist.md"]);
+  assert.deepEqual(result.skipped, [
+    ".pi/agents/_baseline.md",
+    "docs/shared/_index.md",
+  ]);
+  assert.equal(await readFile(path.join(root, ".pi/agents/_baseline.md"), "utf8"), "existing baseline\n");
+  assert.equal(await readFile(path.join(root, "docs/shared/_index.md"), "utf8"), "existing index\n");
+});
+
+test("formatPersonaProjectScaffoldCreatedMessage gives init next steps", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-init-message-"));
+  const result = await createPersonaProjectScaffold(root);
+
+  assert.equal(formatPersonaProjectScaffoldCreatedMessage(result), [
+    "Initialized Pi Persona project",
+    "",
+    "Created:",
+    "- .pi/agents/_baseline.md",
+    "- .pi/agents/generalist.md",
+    "- docs/shared/_index.md",
+    "",
+    "Primary generalist: /generalist",
+    "Next: add specialists with /persona new <name>, then run /persona doctor",
+  ].join("\n"));
 });
 
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {

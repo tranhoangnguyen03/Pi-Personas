@@ -376,7 +376,7 @@ Optional fields:
 
 The blueprint must explicitly support how a user turns the generic extension
 into their local operating layer. The setup path has four parts: required
-runtime packages, agents, docs, and skills.
+runtime packages, project initialization, agents, docs, and skills.
 
 ### 7.0 Installing Runtime Dependencies
 
@@ -407,7 +407,23 @@ role: runtime
 This keeps the project reproducible and avoids making users choose between a
 persona system and a subagent system.
 
-### 7.1 Defining Agents
+### 7.1 Project Initialization
+
+`/persona init` creates the minimal usable project layer without inventing a
+business-specific agent set:
+
+- `.pi/agents/_baseline.md`
+- `.pi/agents/generalist.md` with `role: generalist` and `primary: true`
+- `docs/shared/_index.md`
+- the project runtime override that lets the generalist use `subagent` for
+  consults
+
+The command should preserve existing files and report what it created versus
+what it left alone. It is setup assistance, not a policy gate. Users still add
+their real operating layer through `/persona new`, direct file edits, or
+conversational authoring.
+
+### 7.2 Defining Agents
 
 Users should be able to define agents in three ways:
 
@@ -467,14 +483,14 @@ The authoring flow should ask only for missing essentials:
 - Agent name.
 - Role purpose.
 - Docs/workstreams it should read.
-- Skill folders that explain relevant tool use or workflows.
+- Native `pi-subagents` skill names that explain relevant tool use or workflows.
 
 Everything else gets a conservative default. The user can refine the agent over
 time by editing the file or asking Pi to edit it. The authoring flow should not
 ask users to set `pi-subagents` compatibility fields unless they are making an
 advanced runtime override.
 
-### 7.2 Deploying Docs
+### 7.3 Deploying Docs
 
 Docs should be ordinary workspace files. The extension should not require a
 separate knowledge-base product, special file format, or mandatory indexing
@@ -518,7 +534,7 @@ preserved. Agentic summarization can be added later if users need richer
 catalogue notes; the baseline mechanism is deterministic tree crawl plus
 editable markdown.
 
-### 7.3 Setting Up And Deploying Skills
+### 7.4 Setting Up And Deploying Skills
 
 Skills are native `pi-subagents` skills. Pi Persona does not create its own
 skill-breadcrumb system and does not treat skill entries as paths. Skills make
@@ -634,6 +650,12 @@ Lists the primary generalist, any non-primary generalists, and all specialists.
 It is read-only and does not launch anything. The list should show each
 persona's role, primary status where relevant, description, docs, and skills.
 Users launch agents directly with `/<agent-name>`.
+
+### Setup Helper: `/persona init`
+
+Creates the minimal baseline, primary generalist, shared docs index, and
+generalist runtime override for an empty project. It preserves existing files
+and leaves real specialist content to the user.
 
 ### Docs Catalogue Helper: `/persona index [docs-dir]`
 
@@ -943,28 +965,30 @@ a valid file. The user can iterate.
 7. **Direct specialist launch.** Launch `/<specialist-name>` sessions.
 8. **Doctor.** Validate dependencies, schema, docs, skills, runtime
    compatibility, copied builtin provenance, and primary-generalist uniqueness.
-9. **Conversational authoring.** Create/edit agents through Pi.
-10. **Primary generalist launch.** Support direct launch of the configured
+9. **Project init.** Add `/persona init` for the minimal baseline, primary
+   generalist, shared docs index, and runtime override.
+10. **Conversational authoring.** Create/edit agents through Pi.
+11. **Primary generalist launch.** Support direct launch of the configured
     primary generalist, usually `/generalist`.
-11. **Consult mechanism.** Add one-hop peer consults with summarized/fresh
+12. **Consult mechanism.** Add one-hop peer consults with summarized/fresh
     context by default and forked requester context as a deliberate envelope
     option.
-12. **Round-table.** Add Delphi-style multi-specialist discourse through
+13. **Round-table.** Add Delphi-style multi-specialist discourse through
     parallel `pi-subagents` runs.
-13. **Persona list.** Add read-only `/persona-list`.
-14. **Progressive docs discovery.** Include shallow directory docs in reads,
+14. **Persona list.** Add read-only `/persona-list`.
+15. **Progressive docs discovery.** Include shallow directory docs in reads,
     support
     `_index.md`, and provide `/persona index` for managed catalogue refresh.
-15. **Initial agent port.** Port the user's initial agent set into the
+16. **Initial agent port.** Port the user's initial agent set into the
     project-level format. Generic sample agents can be extracted later for
     documentation and onboarding.
 
 Steps 1-8 prove the runtime-backed role-aware file model.
-Steps 9-10 make the system user-customizable.
-Steps 11-12 add multi-agent leverage.
-Step 13 improves discovery ergonomics.
-Step 14 reduces directory-doc runtime friction.
-Step 15 makes the user's initial operating layer real.
+Steps 9-11 make the system user-customizable.
+Steps 12-13 add multi-agent leverage.
+Step 14 improves discovery ergonomics.
+Step 15 reduces directory-doc runtime friction.
+Step 16 makes the user's initial operating layer real.
 
 ---
 
@@ -1049,6 +1073,11 @@ selected specialist's declared docs as `reads`, and emits only baseline plus
 selected specialist native skill names as `skill`.
 
 ### Phase 3 - User Setup Path
+
+**Test 3.0 - Project init.**
+Run `/persona init` in an empty project. Pass: `_baseline.md`,
+`generalist.md`, `docs/shared/_index.md`, and the generalist subagent runtime
+override are created; running it again preserves existing files.
 
 **Test 3.1 - Conversational agent creation.**
 Ask Pi to create a new specialist for a concrete workstream. Pass: a valid
