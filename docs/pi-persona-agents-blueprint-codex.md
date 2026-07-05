@@ -423,6 +423,87 @@ what it left alone. It is setup assistance, not a policy gate. Users still add
 their real operating layer through `/persona new`, direct file edits, or
 conversational authoring.
 
+Manifest-backed init is the next ergonomic layer. The target flow is:
+
+```text
+/persona init draft --out mock-data/business-operating-layer.yaml
+/persona init --plan --from mock-data/business-operating-layer.yaml
+/persona init --from mock-data/business-operating-layer.yaml
+/persona init status --from mock-data/business-operating-layer.yaml
+/persona doctor
+/persona-list
+```
+
+The split is deliberate:
+
+- `/persona init draft` is the optional agentic authoring aid. It interviews the
+  user, proposes agents/docs/native skill names, and writes or revises a YAML
+  manifest for human review.
+- `/persona init --from <file>` is mechanical. It parses YAML, validates it,
+  writes files, preserves existing content unless an explicit overwrite mode is
+  added, updates runtime overrides, and makes no creative decisions.
+- `/persona init --plan --from <file>` is a dry run. It shows what would be
+  created, preserved, warned, or rejected.
+- `/persona init status --from <file>` is a progress checklist derived from the
+  manifest and filesystem. It should not create a separate state database.
+
+The manifest's required fields are intentionally small:
+
+```yaml
+version: 1
+project:
+  name: business-operating-layer
+
+baseline:
+  prompt: |
+    Shared operating principles for every persona.
+  docs:
+    - docs/shared/
+  skills: []
+
+agents:
+  - name: generalist
+    role: generalist
+    primary: true
+    description: Routes requests and synthesizes specialist input.
+    prompt: |
+      Answer directly when shared context is enough.
+      Consult specialists when the request clearly needs them.
+```
+
+Required contents:
+
+- `version`.
+- `project.name`.
+- `baseline.prompt`.
+- `agents`.
+- Each agent has `name`, `role`, `description`, and `prompt`.
+- Exactly one `role: generalist` agent has `primary: true`.
+
+Optional contents:
+
+- `baseline.docs` and `baseline.skills`.
+- Top-level `docs.files`, mapping workspace paths to initial file content.
+- Agent `docs`, `skills`, `model`, and `primary`.
+- Agent-specific initial doc files under `docs.files`.
+
+Skills in the manifest are native `pi-subagents` skill names. They are not
+paths. The manifest should not contain `tools`, `defaultReads`, or path-style
+skill entries such as `.pi/skills/workstreams/brand/`.
+
+The progress checklist should be plain and actionable:
+
+```text
+Pi Persona Init Status
+
+[done] dependencies installed
+[done] baseline exists
+[done] primary generalist exists
+[todo] missing docs/workstreams/research/_index.md
+[warn] skill researcher not confirmed by doctor
+[next] run /persona index --all
+```
+
 ### 7.2 Defining Agents
 
 Users should be able to define agents in three ways:
@@ -656,6 +737,13 @@ Users launch agents directly with `/<agent-name>`.
 Creates the minimal baseline, primary generalist, shared docs index, and
 generalist runtime override for an empty project. It preserves existing files
 and leaves real specialist content to the user.
+
+Manifest-backed variants are planned for richer setup:
+
+- `/persona init draft --out <file>` for optional agentic YAML authoring.
+- `/persona init --plan --from <file>` for a dry-run checklist.
+- `/persona init --from <file>` for deterministic file creation.
+- `/persona init status --from <file>` for progress and next-step reporting.
 
 ### Docs Catalogue Helper: `/persona index [docs-dir]`
 
