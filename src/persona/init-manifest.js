@@ -6,7 +6,6 @@ import { resolveWorkspacePath } from "./agents.js";
 import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
-import { ensureNestedConsultRuntimeOverride, readProjectSettings } from "./settings.js";
 
 const VALID_ROLES = new Set(["generalist", "specialist"]);
 
@@ -56,18 +55,10 @@ export async function planPersonaInitFromManifest(root, sourcePath) {
   const manifest = await readManifest(root, sourcePath);
   const actions = [];
   for (const entry of buildManifestEntries(manifest)) {
-    if (entry.kind === "file") {
-      actions.push({
-        kind: "file",
-        path: entry.path,
-        status: await exists(root, entry.path) ? "preserve" : "create",
-      });
-      continue;
-    }
     actions.push({
-      kind: "runtime",
-      agent: entry.agent,
-      status: await hasRuntimeOverride(root, entry.agent) ? "present" : "update",
+      kind: "file",
+      path: entry.path,
+      status: await exists(root, entry.path) ? "preserve" : "create",
     });
   }
 
@@ -78,22 +69,12 @@ export async function applyPersonaInitFromManifest(root, sourcePath) {
   const manifest = await readManifest(root, sourcePath);
   const actions = [];
   for (const entry of buildManifestEntries(manifest)) {
-    if (entry.kind === "file") {
-      const created = await writeFileIfMissing(root, entry.path, entry.content);
-      actions.push({
-        kind: "file",
-        path: entry.path,
-        status: created ? "created" : "preserved",
-      });
-      continue;
-    }
-
-    if (await hasRuntimeOverride(root, entry.agent)) {
-      actions.push({ kind: "runtime", agent: entry.agent, status: "present" });
-    } else {
-      await ensureNestedConsultRuntimeOverride(root, entry.agent);
-      actions.push({ kind: "runtime", agent: entry.agent, status: "updated" });
-    }
+    const created = await writeFileIfMissing(root, entry.path, entry.content);
+    actions.push({
+      kind: "file",
+      path: entry.path,
+      status: created ? "created" : "preserved",
+    });
   }
 
   return baseResult("apply", manifest, actions);
@@ -103,16 +84,9 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
   const manifest = await readManifest(root, sourcePath);
   const items = [];
   for (const entry of buildManifestEntries(manifest)) {
-    if (entry.kind === "file") {
-      items.push({
-        state: await exists(root, entry.path) ? "done" : "todo",
-        label: entry.path,
-      });
-      continue;
-    }
     items.push({
-      state: await hasRuntimeOverride(root, entry.agent) ? "done" : "todo",
-      label: `runtime override: ${entry.agent}`,
+      state: await exists(root, entry.path) ? "done" : "todo",
+      label: entry.path,
     });
   }
   items.push(...await docsIndexStatusItems(root, manifest));
@@ -144,16 +118,6 @@ export function formatPersonaInitManifestReport(result) {
   } else {
     for (const action of fileActions) {
       lines.push(`- ${action.status} ${action.path}`);
-    }
-  }
-
-  lines.push("", "## Runtime");
-  const runtimeActions = result.actions.filter((action) => action.kind === "runtime");
-  if (runtimeActions.length === 0) {
-    lines.push("- none");
-  } else {
-    for (const action of runtimeActions) {
-      lines.push(`- ${action.status} runtime override: ${action.agent}`);
     }
   }
 
@@ -426,10 +390,6 @@ function buildManifestEntries(manifest) {
       path: file.path,
       content: file.content,
     })),
-    ...manifest.agents.map((agent) => ({
-      kind: "runtime",
-      agent: agent.name,
-    })),
   ];
 }
 
@@ -481,12 +441,6 @@ async function exists(root, relativePath) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
-}
-
-async function hasRuntimeOverride(root, agentName) {
-  const settings = await readProjectSettings(root);
-  const tools = settings?.subagents?.agentOverrides?.[agentName]?.tools;
-  return normalizeList(tools).includes("subagent");
 }
 
 function assertWorkspacePath(root, relativePath, label) {

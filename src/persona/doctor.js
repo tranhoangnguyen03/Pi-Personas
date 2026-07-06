@@ -11,7 +11,6 @@ import {
 } from "./agents.js";
 import { inspectDocPath } from "./doc-index.js";
 import { validatePersonaSchema } from "./schema.js";
-import { hasNestedConsultRuntimeOverride, readProjectSettings } from "./settings.js";
 
 export async function runDoctor(root, options = {}) {
   const project = await discoverPersonaProject(root);
@@ -25,7 +24,6 @@ export async function runDoctor(root, options = {}) {
   collectGeneralistIssues(project, issues);
   await collectDocsIssues(project, issues);
   collectSkillsIssues(project, issues);
-  await collectNestedConsultRuntimeIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
 
   const status = issues.some((issue) => issue.severity === "error")
@@ -111,14 +109,14 @@ function dependencyLine(name, dependency) {
 function collectDependencyIssues(dependencies, issues) {
   if (!dependencies.piSubagents?.ok) {
     issues.push({
-      severity: "error",
-      message: "missing required dependency pi-subagents",
+      severity: "warning",
+      message: "pi-subagents missing; consults and round-tables are unavailable",
     });
   }
   if (!dependencies.piIntercom?.ok) {
     issues.push({
-      severity: "error",
-      message: "missing required dependency pi-intercom",
+      severity: "warning",
+      message: "pi-intercom missing; blocked child supervision is unavailable",
     });
   }
 }
@@ -243,19 +241,6 @@ function collectLegacyMetadataIssues(project, issues) {
         message: `${agent.relativePath}: legacy field ${field} found; ${guidance}`,
       });
     }
-  }
-}
-
-async function collectNestedConsultRuntimeIssues(project, issues) {
-  const settings = await readProjectSettings(project.root);
-  for (const agent of project.agents) {
-    if (!["generalist", "specialist"].includes(agent.role)) continue;
-    if (hasNestedConsultRuntimeOverride(settings, agent)) continue;
-    issues.push({
-      severity: "warning",
-      file: agent.relativePath,
-      message: `${agent.relativePath}: nested persona consults need project runtime override tools: subagent in .pi/settings.json; /persona new creates this automatically`,
-    });
   }
 }
 

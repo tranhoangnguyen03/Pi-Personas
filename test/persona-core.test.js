@@ -13,7 +13,7 @@ import {
   discoverPersonaProject,
   createAgentScaffold,
   formatAgentScaffoldCreatedMessage,
-  formatConsultSubagentInstructions,
+  formatConsultBridgeResult,
   formatConsultProvenance,
   formatDocsIndexReport,
   formatPersonaProjectScaffoldCreatedMessage,
@@ -90,15 +90,6 @@ Guideline prompt.
   await writeText(path.join(root, "docs/shared/company.md"), "Shared doc\n");
   await writeText(path.join(root, "docs/workstreams/brand/brief.md"), "Brand doc\n");
   await writeText(path.join(root, "docs/workstreams/guideline/rules.md"), "Guideline doc\n");
-  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
-    subagents: {
-      agentOverrides: {
-        generalist: { tools: ["subagent"] },
-        brand: { tools: ["subagent"] },
-        guideline: { tools: ["subagent"] },
-      },
-    },
-  }, null, 2)}\n`);
 
   return root;
 }
@@ -213,8 +204,24 @@ test("extension registers the persona_consult tool", async () => {
   assert.match(source, /registerTool\(/);
   assert.match(source, /name:\s*"persona_consult"/);
   assert.match(source, /resolveConsultLaunchRequest/);
-  assert.match(source, /formatConsultSubagentInstructions/);
-  assert.doesNotMatch(consultToolBlock, /runSubagentBridgeRequest/);
+  assert.match(source, /formatConsultBridgeResult/);
+  assert.match(consultToolBlock, /runSubagentBridgeRequest/);
+  assert.doesNotMatch(consultToolBlock, /formatConsultSubagentInstructions/);
+});
+
+test("extension direct persona commands activate the current chat instead of the subagent bridge", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const commandBlock = source.slice(
+    source.indexOf("const registerPersonaCommand"),
+    source.indexOf("const registerProjectCommands"),
+  );
+
+  assert.match(commandBlock, /setActivePersona/);
+  assert.match(commandBlock, /sendUserMessage/);
+  assert.doesNotMatch(commandBlock, /runSubagentBridgeRequest/);
+  assert.match(source, /before_agent_start/);
+  assert.match(source, /\/persona status/);
+  assert.match(source, /\/persona clear/);
 });
 
 test("extension registers persona-roundtable as a namespaced command", async () => {
@@ -228,15 +235,41 @@ test("extension registers persona-roundtable as a namespaced command", async () 
   assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
 });
 
-test("extension shows visible progress for direct persona launches", async () => {
+test("extension stores active persona state for direct persona mode", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const beforeAgentStartBlock = source.slice(
+    source.indexOf('pi.on("before_agent_start"'),
+    source.indexOf('pi.registerCommand("persona"'),
+  );
 
-  assert.match(source, /createPersonaLaunchProgress/);
-  assert.match(source, /Launching \$\{agentName\}/);
-  assert.match(source, /Persona is running/);
-  assert.match(source, /onUpdate\(update: unknown\)/);
-  assert.match(source, /statusKey:\s*"pi-persona-launch"/);
-  assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
+  assert.match(source, /ACTIVE_PERSONA_STATE_TYPE/);
+  assert.match(source, /appendEntry\(ACTIVE_PERSONA_STATE_TYPE/);
+  assert.match(source, /restoreActivePersona/);
+  assert.match(source, /before_agent_start/);
+  assert.match(source, /pi-persona-active/);
+  assert.match(beforeAgentStartBlock, /updateActivePersonaStatus\(ctx\)/);
+  assert.doesNotMatch(source, /createPersonaLaunchProgress/);
+});
+
+test("active persona prompt treats raw subagent discovery as outside persona consults", async () => {
+  const root = await createWorkspace();
+
+  const launch = await resolveAgentLaunchRequest(root, "generalist");
+
+  assert.match(launch.systemPrompt, /persona_consult/);
+  assert.match(launch.systemPrompt, /Known personas:/);
+  assert.match(launch.systemPrompt, /Do not use raw `subagent list` to discover Pi Persona consultants/);
+  assert.match(launch.systemPrompt, /Raw `subagent` launches are global Pi runtime behavior/);
+});
+
+test("docs document active persona footer and global subagent list behavior", async () => {
+  const blueprint = await readFile(path.join(process.cwd(), "docs/pi-persona-agents-blueprint-codex.md"), "utf8");
+
+  assert.match(blueprint, /pi-persona-active/);
+  assert.match(blueprint, /powerline\.customItems/);
+  assert.match(blueprint, /npm:pi-powerline-footer/);
+  assert.match(blueprint, /`subagent list` lists global Pi subagents/);
+  assert.match(blueprint, /`persona_consult` only accepts project Pi Persona agents/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
@@ -423,7 +456,22 @@ test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () =>
   }
 });
 
-test("doctor warns when a persona lacks nested consult runtime provisioning", async () => {
+test("doctor warns but keeps direct mode available when child runtime packages are missing", async () => {
+  const root = await createWorkspace();
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: false, path: "/tmp/pi-subagents" },
+      piIntercom: { ok: false, path: "/tmp/pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "warning");
+  assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-subagents missing; consults and round-tables are unavailable")));
+  assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-intercom missing; blocked child supervision is unavailable")));
+});
+
+test("doctor does not require per-persona subagent runtime provisioning", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/manual.md"), `---
@@ -443,11 +491,11 @@ Manual prompt.
     },
   });
 
-  assert.equal(result.status, "warning");
-  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/manual.md: nested persona consults need project runtime override tools: subagent")));
+  assert.equal(result.status, "pass");
+  assert.equal(result.issues.some((issue) => issue.message.includes("nested persona consults need project runtime override")), false);
 });
 
-test("doctor treats legacy tools subagent as nested consult provisioning without duplicate warning", async () => {
+test("doctor treats legacy tools subagent as metadata to migrate, not required provisioning", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/manual.md"), `---
@@ -537,9 +585,9 @@ test("resolver expands directory docs through progressive discovery reads", asyn
   ]);
 
   const launch = buildAgentLaunchRequest(scope, { task: "Use progressive docs." });
-  assert.match(launch.subagentParams.task, /Progressive doc discovery:/);
-  assert.match(launch.subagentParams.task, /docs\/workstreams\/brand\/: 1 nested file not included in reads; read docs\/workstreams\/brand\/_index\.md/);
-  assert.doesNotMatch(launch.subagentParams.task.split("\n\n")[0], /examples\/example\.md/);
+  assert.match(launch.systemPrompt, /Progressive doc discovery:/);
+  assert.match(launch.systemPrompt, /docs\/workstreams\/brand\/: 1 nested file not included in reads; read docs\/workstreams\/brand\/_index\.md/);
+  assert.doesNotMatch(launch.systemPrompt.split("\n\n")[0], /examples\/example\.md/);
 });
 
 test("doctor warns when nested directory docs have no index", async () => {
@@ -574,10 +622,10 @@ Nested prompt.
   const scope = await resolveAgentScope(root, "nested");
   const launch = buildAgentLaunchRequest(scope, { task: "Find deep docs." });
 
-  assert.equal(Object.hasOwn(launch.subagentParams, "reads"), false);
-  assert.match(launch.subagentParams.task, /\[Read from: none\]/);
-  assert.match(launch.subagentParams.task, /Progressive doc discovery:/);
-  assert.match(launch.subagentParams.task, /docs\/nested\/: 1 nested file not included in reads; no _index file was found/);
+  assert.equal(launch.subagentParams, undefined);
+  assert.match(launch.systemPrompt, /\[Read from: none\]/);
+  assert.match(launch.systemPrompt, /Progressive doc discovery:/);
+  assert.match(launch.systemPrompt, /docs\/nested\/: 1 nested file not included in reads; no _index file was found/);
 });
 
 test("persona docs index preserves hand notes while refreshing generated catalogue", async () => {
@@ -741,9 +789,6 @@ description: Backup generalist.
 ---
 Backup generalist prompt.
 `);
-  const settings = await readJson(path.join(root, ".pi/settings.json"));
-  settings.subagents.agentOverrides["backup-generalist"] = { tools: ["subagent"] };
-  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
 
   const result = await runDoctor(root, {
     dependencyStatus: {
@@ -906,7 +951,7 @@ Operator prompt.
   assert.ok(!scope.skills.includes("guideline-skill"));
 });
 
-test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", async () => {
+test("buildAgentLaunchRequest creates an active-session persona request", async () => {
   const root = await createWorkspace();
   const scope = await resolveAgentScope(root, "brand");
 
@@ -915,35 +960,25 @@ test("buildAgentLaunchRequest creates a fresh pi-subagents single-run request", 
   });
 
   assert.equal(launch.agentName, "brand");
-  assert.equal(launch.context, "fresh");
+  assert.equal(launch.context, "active");
+  assert.equal(launch.userMessage, "Draft a short launch message.");
   assert.deepEqual(launch.docs, [
     "docs/shared/",
     "docs/workstreams/brand/",
   ]);
   assert.deepEqual(launch.skills, ["shared-skill", "brand-skill"]);
-  assert.deepEqual(launch.subagentParams, {
-    agent: "brand",
-    task: launch.subagentParams.task,
-    clarify: false,
-    agentScope: "both",
-    context: "fresh",
-    skill: ["shared-skill", "brand-skill"],
-    reads: [
-      "docs/shared/company.md",
-      "docs/workstreams/brand/brief.md",
-    ],
-  });
-  assert.match(launch.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
-  assert.match(launch.subagentParams.task, /Resolved doc files:\n- docs\/shared\/: docs\/shared\/company\.md\n- docs\/workstreams\/brand\/: docs\/workstreams\/brand\/brief\.md/);
-  assert.doesNotMatch(launch.subagentParams.task, /Resolved skill files:/);
-  assert.match(launch.subagentParams.task, /## Baseline Context\n\nShared operating context\./);
-  assert.match(launch.subagentParams.task, /## User Request\n\nDraft a short launch message\./);
-  assert.match(launch.subagentParams.task, /Tool: subagent/);
-  assert.match(launch.subagentParams.task, /Consult known personas from the roster when specialist expertise is useful/);
-  assert.match(launch.subagentParams.task, /requester: brand/);
-  assert.match(launch.subagentParams.task, /Known personas:/);
-  assert.match(launch.subagentParams.task, /guideline - specialist: Guideline reviewer\./);
-  assert.doesNotMatch(launch.subagentParams.task, /Tool: persona_consult/);
+  assert.equal(launch.subagentParams, undefined);
+  assert.match(launch.systemPrompt, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/brand\/brief\.md\]/);
+  assert.match(launch.systemPrompt, /Resolved doc files:\n- docs\/shared\/: docs\/shared\/company\.md\n- docs\/workstreams\/brand\/: docs\/workstreams\/brand\/brief\.md/);
+  assert.doesNotMatch(launch.systemPrompt, /Resolved skill files:/);
+  assert.match(launch.systemPrompt, /## Active Pi Persona\n\nYou are the active Pi Persona `brand`/);
+  assert.match(launch.systemPrompt, /Answer the user's current request directly as this persona/);
+  assert.match(launch.systemPrompt, /Do not start a pi-subagents child run to answer a direct persona command/);
+  assert.match(launch.systemPrompt, /Tool: persona_consult/);
+  assert.match(launch.systemPrompt, /Known personas:/);
+  assert.match(launch.systemPrompt, /guideline - specialist: Guideline reviewer\./);
+  assert.match(launch.systemPrompt, /## Baseline Context\n\nShared operating context\./);
+  assert.match(launch.systemPrompt, /## Agent Instructions\n\nBrand prompt\./);
   assert.equal(Object.hasOwn(scope.agent.frontmatter, "defaultReads"), false);
 });
 
@@ -953,9 +988,9 @@ test("buildAgentLaunchRequest includes roster consult guidance without allowlist
 
   const request = buildAgentLaunchRequest(scope, { task: "Answer directly." });
 
-  assert.match(request.subagentParams.task, /Known personas:/);
-  assert.match(request.subagentParams.task, /brand - specialist: Brand strategy specialist\./);
-  assert.doesNotMatch(request.subagentParams.task, /Allowed consultants:/);
+  assert.match(request.systemPrompt, /Known personas:/);
+  assert.match(request.systemPrompt, /brand - specialist: Brand strategy specialist\./);
+  assert.doesNotMatch(request.systemPrompt, /Allowed consultants:/);
 });
 
 test("resolveAgentLaunchRequest refuses duplicate agent names instead of choosing one", async () => {
@@ -1062,7 +1097,7 @@ test("resolveConsultLaunchRequest honors deliberate fork context", async () => {
   assert.match(consult.subagentParams.task, /context: fork/);
 });
 
-test("formatConsultSubagentInstructions returns the exact child-safe subagent request", async () => {
+test("formatConsultBridgeResult returns consultant answer with compact provenance", async () => {
   const root = await createWorkspace();
 
   const consult = await resolveConsultLaunchRequest(root, {
@@ -1072,13 +1107,12 @@ test("formatConsultSubagentInstructions returns the exact child-safe subagent re
     summary: "The requester needs guideline review.",
   });
 
-  const instructions = formatConsultSubagentInstructions(consult);
+  const text = formatConsultBridgeResult(consult, "Guideline approved.\nSecond line.", false);
 
-  assert.match(instructions, /Call the `subagent` tool with this exact request/);
-  assert.match(instructions, /"agent": "guideline"/);
-  assert.match(instructions, /"context": "fresh"/);
-  assert.match(instructions, /After the `subagent` result returns/);
-  assert.match(instructions, /- guideline \(answered\): <one-line summary>/);
+  assert.match(text, /## guideline/);
+  assert.match(text, /Guideline approved\./);
+  assert.match(text, /Consulted:/);
+  assert.match(text, /- guideline \(answered\): Guideline approved\./);
 });
 
 test("buildConsultEnvelope requires requester-written summary", () => {
@@ -1444,8 +1478,10 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
   const project = await discoverPersonaProject(root);
   assert.deepEqual(project.agents.map((agent) => agent.name), ["market-researcher"]);
 
-  const settings = await readJson(path.join(root, ".pi/settings.json"));
-  assert.deepEqual(settings.subagents.agentOverrides["market-researcher"].tools, ["subagent"]);
+  await assert.rejects(
+    () => readFile(path.join(root, ".pi/settings.json"), "utf8"),
+    /ENOENT/,
+  );
 });
 
 test("createAgentScaffold writes provided setup metadata without runtime fields", async () => {
@@ -1478,9 +1514,9 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
   assert.deepEqual(agent.skills, ["market-skill"]);
 });
 
-test("createAgentScaffold preserves existing project settings while adding runtime subagent override", async () => {
+test("createAgentScaffold preserves existing project settings without adding runtime overrides", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-settings-"));
-  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+  const originalSettings = {
     packages: [".."],
     subagents: {
       disableThinking: true,
@@ -1488,20 +1524,18 @@ test("createAgentScaffold preserves existing project settings while adding runti
         existing: { model: "openai/gpt-5-mini" },
       },
     },
-  }, null, 2)}\n`);
+  };
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify(originalSettings, null, 2)}\n`);
 
   await createAgentScaffold(root, "Market Research");
 
   const settings = await readJson(path.join(root, ".pi/settings.json"));
-  assert.deepEqual(settings.packages, [".."]);
-  assert.equal(settings.subagents.disableThinking, true);
-  assert.deepEqual(settings.subagents.agentOverrides.existing, { model: "openai/gpt-5-mini" });
-  assert.deepEqual(settings.subagents.agentOverrides["market-research"].tools, ["subagent"]);
+  assert.deepEqual(settings, originalSettings);
 });
 
-test("createAgentScaffold preserves same-agent runtime settings while adding subagent tool", async () => {
+test("createAgentScaffold preserves same-agent runtime settings without adding subagent tool", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-settings-"));
-  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+  const originalSettings = {
     subagents: {
       agentOverrides: {
         "market-research": {
@@ -1510,13 +1544,13 @@ test("createAgentScaffold preserves same-agent runtime settings while adding sub
         },
       },
     },
-  }, null, 2)}\n`);
+  };
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify(originalSettings, null, 2)}\n`);
 
   await createAgentScaffold(root, "Market Research");
 
   const settings = await readJson(path.join(root, ".pi/settings.json"));
-  assert.equal(settings.subagents.agentOverrides["market-research"].model, "openai/gpt-5-mini");
-  assert.deepEqual(settings.subagents.agentOverrides["market-research"].tools, ["read", "subagent"]);
+  assert.deepEqual(settings, originalSettings);
 });
 
 test("createPersonaProjectScaffold creates minimal baseline and primary generalist", async () => {
@@ -1540,8 +1574,10 @@ test("createPersonaProjectScaffold creates minimal baseline and primary generali
   assert.match(generalist, /primary: true/);
   assert.match(sharedIndex, /# Shared Docs Index/);
 
-  const settings = await readJson(path.join(root, ".pi/settings.json"));
-  assert.deepEqual(settings.subagents.agentOverrides.generalist.tools, ["subagent"]);
+  await assert.rejects(
+    () => readFile(path.join(root, ".pi/settings.json"), "utf8"),
+    /ENOENT/,
+  );
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
@@ -1657,17 +1693,17 @@ test("manifest init plans applies and reports status for a starter layer", async
   assert.ok(plan.actions.some((action) => action.status === "create" && action.path === ".pi/agents/generalist.md"));
   assert.ok(plan.actions.some((action) => action.status === "create" && action.path === ".pi/agents/operator.md"));
   assert.ok(plan.actions.some((action) => action.status === "create" && action.path === "docs/shared/context.md"));
-  assert.ok(plan.actions.some((action) => action.status === "update" && action.agent === "generalist"));
+  assert.equal(plan.actions.some((action) => action.kind === "runtime"), false);
 
   const planReport = formatPersonaInitManifestReport(plan);
   assert.match(planReport, /Pi Persona Init Plan/);
   assert.match(planReport, /create \.pi\/agents\/operator\.md/);
-  assert.match(planReport, /update runtime override: generalist/);
+  assert.doesNotMatch(planReport, /runtime override/);
 
   const applied = await applyPersonaInitFromManifest(root, "init-data/business.yaml");
   assert.equal(applied.mode, "apply");
   assert.ok(applied.actions.some((action) => action.status === "created" && action.path === ".pi/agents/operator.md"));
-  assert.ok(applied.actions.some((action) => action.status === "updated" && action.agent === "operator"));
+  assert.equal(applied.actions.some((action) => action.kind === "runtime"), false);
 
   const baseline = await readFile(path.join(root, ".pi/agents/_baseline.md"), "utf8");
   const generalist = await readFile(path.join(root, ".pi/agents/generalist.md"), "utf8");
@@ -1678,9 +1714,10 @@ test("manifest init plans applies and reports status for a starter layer", async
   assert.match(operator, /description: Runs operating checklists\./);
   assert.match(doc, /TEST_BUSINESS_CONTEXT/);
 
-  const settings = await readJson(path.join(root, ".pi/settings.json"));
-  assert.deepEqual(settings.subagents.agentOverrides.generalist.tools, ["subagent"]);
-  assert.deepEqual(settings.subagents.agentOverrides.operator.tools, ["subagent"]);
+  await assert.rejects(
+    () => readFile(path.join(root, ".pi/settings.json"), "utf8"),
+    /ENOENT/,
+  );
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
@@ -1787,12 +1824,12 @@ Shared pilot context.
   const directLaunch = await resolveAgentLaunchRequest(root, "brand", {
     task: "Draft a pilot brand answer.",
   });
-  assert.equal(directLaunch.subagentParams.agent, "brand");
-  assert.equal(directLaunch.subagentParams.context, "fresh");
-  assert.deepEqual(directLaunch.subagentParams.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
-  assert.deepEqual(directLaunch.subagentParams.skill, ["shared-skill", "brand-skill"]);
-  assert.match(directLaunch.subagentParams.task, /Tool: subagent/);
-  assert.match(directLaunch.subagentParams.task, /Known personas:/);
+  assert.equal(directLaunch.agentName, "brand");
+  assert.equal(directLaunch.context, "active");
+  assert.equal(directLaunch.userMessage, "Draft a pilot brand answer.");
+  assert.equal(directLaunch.subagentParams, undefined);
+  assert.match(directLaunch.systemPrompt, /Tool: persona_consult/);
+  assert.match(directLaunch.systemPrompt, /Known personas:/);
 
   const consult = await resolveConsultLaunchRequest(root, {
     requester: "brand",

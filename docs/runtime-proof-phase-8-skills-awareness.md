@@ -14,6 +14,13 @@ listing, doctor, direct launch, and legacy-field migration warnings. Direct
 launch also proved that shared and specialist `skills.md` files are available to
 the launched child.
 
+The direct-launch mechanism in this proof is historical. The current direction
+is persistent active persona mode: `/<persona> [query]` answers in the active Pi
+chat session with persona instructions injected before agent turns. Direct
+persona answers should not launch `pi-subagents`; `pi-subagents` remains the
+execution detail for `persona_consult` and explicit `/persona-roundtable`
+workflows.
+
 Roster consult behavior was partially proved. The requester accepted
 `phase8-guideline` by name without a `consults` allowlist and produced the
 expected `Consulted:` provenance. However, the child reported that the native Pi
@@ -23,11 +30,11 @@ consult. Treat the transcript as evidence that roster-based consult prompting
 works, not as full proof of nested consult execution from inside a child
 persona.
 
-The root cause is a real `pi-subagents` runtime boundary: child sessions receive
-the child-safe `subagent` fanout tool only when the resolved agent config
-includes builtin `subagent` in `tools`. Pi Persona keeps `tools` out of
-user-facing persona files, so the adapter now provisions that capability in
-project runtime settings instead:
+The caveat below describes the older child-run consult design. Under the
+current direction, the active top-level persona calls `persona_consult`, and
+that tool executes the `pi-subagents` consult internally. Direct persona mode no
+longer requires every scaffolded persona to receive child-safe `subagent`
+fanout by default. The historical runtime boundary was:
 
 ```json
 {
@@ -41,9 +48,12 @@ project runtime settings instead:
 }
 ```
 
-`/persona new` creates or preserves this `.pi/settings.json` override
-automatically. `/persona doctor` warns when a manually created persona lacks the
-runtime override or legacy-compatible `tools: subagent`.
+At the time of this proof, `/persona new` created or preserved this
+`.pi/settings.json` override automatically, and `/persona doctor` warned when a
+manually created persona lacked the runtime override or legacy-compatible
+`tools: subagent`. That requirement is superseded: current direct persona mode
+does not write the override, and `/persona doctor` no longer requires
+per-persona subagent provisioning.
 
 ## Goal
 
@@ -53,8 +63,9 @@ Prove the live Pi runtime matches the current Pi Persona metadata contract:
 - `/persona-list` shows role, description, docs, and skills.
 - `/persona doctor` reports legacy `tools`/`consults`/`tags` as migration
   warnings, not permission gates.
-- Direct launch preloads shared and specialist `skills.md` files as awareness
-  breadcrumbs.
+- Active persona mode names shared and specialist native skills as awareness
+  hints; consult and round-table child runs pass those skills through to
+  `pi-subagents`.
 - Consults can target any known persona by name, guided by descriptions rather
   than requester-specific consult allowlists.
 
@@ -175,40 +186,73 @@ Issues
 - WARNING: .pi/agents/phase8-legacy.md: legacy field tags found; prefer high-signal descriptions
 ```
 
-## Runtime Gap Resolution
+## Historical Runtime Gap Resolution
 
-- `src/persona/settings.js` owns Pi Persona's project runtime settings adapter.
-- `createAgentScaffold()` keeps generated agent files clean and writes
+These points document the older child-run consult workaround:
+
+- `src/persona/settings.js` owned Pi Persona's old project runtime settings
+  adapter. It has been removed from the current code path.
+- `createAgentScaffold()` kept generated agent files clean and wrote
   `subagents.agentOverrides.<agent>.tools: ["subagent"]` in `.pi/settings.json`.
-- The settings writer preserves existing settings and existing same-agent
+- The settings writer preserved existing settings and existing same-agent
   override fields while adding the `subagent` builtin.
-- `/persona doctor` warns when a launchable generalist or specialist lacks
+- `/persona doctor` warned when a launchable generalist or specialist lacked
   nested-consult runtime provisioning.
-- Legacy `tools: subagent` is still accepted as runtime provisioning for
-  compatibility, but doctor continues to warn that `tools` is legacy
+- Legacy `tools: subagent` was accepted as runtime provisioning for
+  compatibility, while doctor continued to warn that `tools` was legacy
   user-facing metadata.
 
-This is intentionally not a restriction model. The override exists because
-`pi-subagents` only registers child-safe fanout when a child agent's resolved
-runtime config includes builtin `subagent`.
+This was intentionally not a restriction model. The override existed because
+`pi-subagents` only registered child-safe fanout when a child agent's resolved
+runtime config included builtin `subagent`. The current direction avoids this
+direct-mode requirement by keeping consult execution inside the top-level
+`persona_consult` tool.
 
 ## Remaining Live Proof
 
-A fresh live Pi run should verify the runtime override in the actual child
-session:
+A fresh live Pi run should verify persistent active persona mode:
 
-- Create new proof personas with `/persona new` so `.pi/settings.json` is
-  provisioned automatically.
-- Run `/persona doctor`; pass means no nested-consult provisioning warnings.
-- Direct-launch the requester and ask it to consult a peer by roster name.
-- Confirm the requester actually calls the child-safe `subagent` tool instead
-  of reading the consultant files directly.
-- Inspect the generated child task or session JSONL to confirm concrete reads
-  include:
+- Create new proof personas with `/persona new`.
+- Run `/persona doctor`; pass means direct persona mode is ready, with
+  consult/round-table dependency warnings separated from direct-mode readiness.
+- Activate the requester with `/<persona> <query>` and confirm no direct
+  `subagent:slash:request` is emitted.
+- Confirm `/persona status` and the Pi status/footer surface show the active
+  persona through the `pi-persona-active` status key. With
+  `npm:pi-powerline-footer`, configure a `powerline.customItems` entry for that
+  key when a dedicated footer segment is desired.
+- Ask the active persona to consult a peer by roster name.
+- Confirm `persona_consult` executes the `pi-subagents` consult internally and
+  returns a consultant result for active-persona synthesis.
+- Ask for "any specialist" and confirm the active persona chooses from the Pi
+  Persona roster, not from raw `subagent list`. Raw `subagent list` is expected
+  to show global Pi subagents, including builtins, user package agents, and
+  project `.pi/agents` files.
+- Inspect the generated consult child task or session JSONL to confirm concrete
+  reads include:
   - `.pi/skills/shared/skills.md`
   - `.pi/skills/workstreams/phase8-brand/skills.md`
   - `docs/shared/phase8/context.md`
   - `docs/workstreams/phase8-brand/brief.md`
+
+## 2026-07-06 Active Persona Re-proof
+
+Manual verification confirmed the current active-persona direction:
+
+- `/persona doctor` passed with `pi-subagents` 0.33.1 and `pi-intercom` 0.6.0.
+- `/generalist <query>` answered in the active Pi chat, and `/persona status`
+  reported `/generalist`.
+- A normal follow-up remained under the active generalist.
+- `/persona new example-specialist` created a specialist, and
+  `/example-specialist <query>` switched the active persona.
+- Footer UI was verified separately by the user through the
+  `pi-persona-active` status key.
+- A broad consult used `persona_consult`; selecting the generalist when only one
+  non-generalist specialist existed was accepted for this proof.
+- Explicit `subagent list` showed global Pi subagents, including builtins, user
+  package agents, and project personas. This is expected Pi runtime behavior,
+  not the Pi Persona consult roster.
+- `/persona clear` returned active persona state to `none`.
 
 ## Setup
 
@@ -259,7 +303,7 @@ Expected:
 - `/persona doctor` passes if exactly one generalist is primary and all doc/skill
   paths exist.
 
-## Direct Launch Proof
+## Historical Direct Launch Proof
 
 Run:
 
@@ -267,7 +311,7 @@ Run:
 /phase8-brand Say exactly PHASE8_DIRECT_SKILLS_AWARENESS_OK. Also report whether you received PHASE8_SHARED_SKILL_OK and PHASE8_BRAND_SKILL_OK. Then stop.
 ```
 
-Expected:
+Historical expected result:
 
 - The run launches through `pi-subagents`.
 - The answer includes `PHASE8_DIRECT_SKILLS_AWARENESS_OK`.
@@ -277,6 +321,10 @@ Expected:
   - `.pi/skills/workstreams/phase8-brand/skills.md`
   - `docs/shared/phase8/context.md`
   - `docs/workstreams/phase8-brand/brief.md`
+
+This proof is superseded for direct persona behavior. Future proof should verify
+active persona prompt injection and reserve `pi-subagents` launch evidence for
+`persona_consult` and `/persona-roundtable`.
 
 ## Roster Consult Proof
 

@@ -1,8 +1,8 @@
 export { parseFrontmatterDocument, splitList, uniqueStrings } from "./frontmatter.js";
 export {
   buildConsultEnvelope,
+  formatConsultBridgeResult,
   formatConsultProvenance,
-  formatConsultSubagentInstructions,
   resolveConsultLaunchRequest,
 } from "./consult.js";
 export {

@@ -58,26 +58,18 @@ export function formatConsultProvenance(results) {
   return lines.join("\n");
 }
 
-export function formatConsultSubagentInstructions(consultRequest) {
-  const provenance = formatConsultProvenance([{
-    consultant: consultRequest.consultant.name,
-    status: "answered",
-    summary: "<one-line summary>",
-  }]);
-
+export function formatConsultBridgeResult(consultRequest, answerText, isError = false) {
+  const text = normalizeAnswerText(answerText);
   return [
-    "Prepared Pi Persona consult request.",
+    `## ${consultRequest.consultant.name}`,
     "",
-    "Call the `subagent` tool with this exact request:",
+    text,
     "",
-    "```json",
-    JSON.stringify(consultRequest.subagentParams, null, 2),
-    "```",
-    "",
-    "After the `subagent` result returns, synthesize the answer for the user.",
-    "Append compact provenance using this shape, replacing the placeholder summary:",
-    "",
-    provenance,
+    formatConsultProvenance([{
+      consultant: consultRequest.consultant.name,
+      status: isError ? "failed" : "answered",
+      summary: summarizeAnswer(text),
+    }]),
   ].join("\n");
 }
 
@@ -123,4 +115,17 @@ function requireText(value, field) {
 
 function optionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeAnswerText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "(no output)";
+}
+
+function summarizeAnswer(text) {
+  const line = text
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry && !entry.startsWith("#"));
+  if (!line) return "(no output)";
+  return line.length > 160 ? `${line.slice(0, 157)}...` : line;
 }

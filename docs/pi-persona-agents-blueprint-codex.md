@@ -1,7 +1,8 @@
 # Pi Persona Agents - Codex Build Blueprint
 
-A generic persona-agent extension for Pi Coding Agent, built on the existing
-`pi-subagents` and `pi-intercom` packages.
+A generic persona-agent extension for Pi Coding Agent, using Pi's active chat
+session for direct persona answers and `pi-subagents`/`pi-intercom` only for
+peer consults, round-tables, and child-session support.
 
 The extension turns Pi's existing coding-agent scaffold into a role-aware
 workspace system. It does not replace Pi's session model, subagent runtime, tool
@@ -12,9 +13,10 @@ project-level `pi-subagents` agent files, workspace docs, native
 
 The intended product shape is an 80/20 base:
 
-- The extension supplies the generic 80%: persona schema, resolver, launch
-  commands, baseline docs, consult and round-table semantics, validation, and
-  conversational authoring on top of `pi-subagents` and `pi-intercom`.
+- The extension supplies the generic 80%: persona schema, resolver, active
+  persona commands, baseline docs, consult and round-table semantics,
+  validation, and conversational authoring on top of Pi, `pi-subagents`, and
+  `pi-intercom`.
 - The user supplies the local 20%: their actual agents, docs, skills,
   workstreams, naming conventions, and operating habits.
 
@@ -41,9 +43,9 @@ Pi owns:
 
 Required dependencies own:
 
-- `pi-subagents` owns child Pi sessions, foreground/background execution,
-  fresh/fork context launch, parallelism, status, resume, interrupt, child
-  safety, and project-level agent discovery.
+- `pi-subagents` owns child Pi sessions for consults and round-tables,
+  foreground/background execution, fresh/fork context launch, parallelism,
+  status, resume, interrupt, child safety, and project-level agent discovery.
 - `pi-intercom` owns targeted session-to-session communication and the
   subagent-to-supervisor bridge for blocked decisions, structured clarification,
   and meaningful plan-changing updates.
@@ -55,7 +57,7 @@ Pi Persona Agents owns:
 - Primary generalist semantics.
 - Baseline-plus-agent awareness assembly.
 - Docs semantics and progressive docs discovery.
-- Command routing from persona commands to `pi-subagents` runs.
+- Command routing from persona commands to active persona mode.
 - Consult and round-table semantics.
 - Validation and setup feedback for declared docs, skills, and agent references.
 - Conversational authoring of agent files.
@@ -66,9 +68,9 @@ tool runtime, or session store. Pi remains the platform; `pi-subagents` and
 workflow layer on top.
 
 `pi-subagents` owns child execution, native tools, native skills,
-`reads`/`defaultReads` transport, context mode, and runtime frontmatter fields.
-Pi Persona compiles its semantic intent into those native runtime fields rather
-than replacing them.
+`reads`/`defaultReads` transport, context mode, and runtime frontmatter fields
+for consult and round-table child runs. Direct persona answers run in the active
+Pi chat session through prompt injection, not through a child subagent run.
 
 ---
 
@@ -81,17 +83,19 @@ than replacing them.
   machinery.
 - **User-customizable.** Users can define agents, deploy docs, and select native
   `pi-subagents` skills without editing extension internals.
-- **Named personas.** Users can launch role-specific Pi sessions by name.
-- **Real awareness inputs.** Each agent receives doc read paths assembled by
-  Pi Persona plus native `pi-subagents` skills selected by baseline and persona
-  metadata. These are operating-context hints, not permission boundaries.
+- **Named personas.** Users can activate role-specific personas by name.
+- **Real awareness inputs.** Each persona receives doc read guidance assembled
+  by Pi Persona plus native `pi-subagents` skill names selected by baseline and
+  persona metadata. These are operating-context hints, not permission
+  boundaries.
 - **Two-tier awareness.** Shared baseline foundation plus additive per-agent
   specialization.
-- **Clean handoff.** One agent launch creates one role-aware `pi-subagents` run or
-  Pi session. Switching agents starts fresh unless the user explicitly resumes.
+- **Clean handoff.** One persona command activates one role-aware persona in the
+  current Pi session. Switching personas is explicit; `/persona clear` exits
+  persona mode.
 - **Three invocation paths.** Primary generalist, direct specialist, and round-table.
-- **Mid-session consultation.** Active agents can invoke known peers through the
-  same resolver.
+- **Mid-session consultation.** Active personas can invoke known peers through
+  `persona_consult`; the tool owns the subagent execution detail.
 - **Low friction.** Avoid confirmations, gates, policy prompts, and write
   restrictions unless a concrete failure mode justifies them.
 - **Build first.** Acknowledge future optimization areas, but do not tune them
@@ -101,20 +105,21 @@ than replacing them.
 
 ## 3. Core Mental Model
 
-> An agent is a file. A resolver assembles a role-aware Pi session from that
-> file. `pi-subagents` executes that session. `pi-intercom` lets child sessions
-> escalate when blocked. Launch, consult, and round-table convening all use the
-> same assembly path.
+> An agent is a file. A resolver assembles role-aware instructions from that
+> file. Direct persona commands inject those instructions into the active Pi
+> session. Consult and round-table workflows reuse the same resolver, then run
+> child sessions through `pi-subagents` when peer execution is actually needed.
 
 Four moving parts:
 
 1. **Agent files** - `.pi/agents/**/*.md`, compatible with project-level
    `pi-subagents` agent discovery, with pi-persona fields layered on top.
 2. **Shared baseline** - `_baseline.md` plus shared docs and native skill names,
-   merged into every agent session.
+   merged into every resolved persona scope.
 3. **Resolver** - generic assembly logic written once.
-4. **Orchestrator** - the primary generalist running consults and round-tables
-   through `pi-subagents`, with `pi-intercom` available for blocked children.
+4. **Active persona adapter** - stores the active persona for the current
+   session, injects its instructions before agent turns, and routes peer
+   consults through `persona_consult`.
 
 The important invariant: adding a new agent is data, not code. A user should be
 able to create a new agent file, run validation, and launch it without adding a
@@ -147,19 +152,24 @@ The blueprint should be implemented through a small adapter over Pi,
 `pi-subagents`, and `pi-intercom`. That adapter isolates package-specific calls
 while keeping a single user-facing system.
 
-Required packages:
+Required packages for consults, round-tables, and child supervision:
 
 - `pi-subagents`
 - `pi-intercom`
 
-The extension should refuse to enable consults, round-tables, or persona
-launches until both packages are installed and visible to Pi. This is not an
-optional enhancement; it is the execution substrate.
+The extension should refuse to run consults, round-tables, or child-supervisor
+handoffs until the relevant package is installed and visible to Pi. Direct
+persona activation should still work when these packages are missing, with
+doctor reporting consult/round-table readiness separately from direct-mode
+readiness.
 
 Required Pi capabilities:
 
 - Read project files under the active workspace.
 - Register or reference tool names exposed by Pi.
+- Store custom transcript entries for active persona state.
+- Inject or transform the next turn's system prompt before agent start.
+- Send a user message or follow-up from a command handler.
 - Load `pi-subagents` project-level agent files.
 - Launch `pi-subagents` child runs in fresh or fork context.
 - Let `pi-intercom` provide `contact_supervisor` to subagent children when
@@ -176,11 +186,13 @@ Runtime contract:
 - The pi-persona resolver decides persona semantics: baseline merge, docs,
   role type, native skill selection, agent roster awareness, and round-table
   protocol.
-- Pi Persona compiles `docs` into `pi-subagents` `reads` at launch time. Users
+- Active persona mode compiles `docs` into prompt-level read guidance. Consult
+  and round-table child runs compile `docs` into `pi-subagents` `reads`. Users
   express document intent through `docs`, not `defaultReads`.
-- Pi Persona passes `skills` through as native `pi-subagents` skill names. It
+- Pi Persona passes `skills` through as native `pi-subagents` skill names for
+  child runs and names them in active persona instructions for direct mode. It
   does not define a separate skill-breadcrumb runtime.
-- `pi-subagents` executes the resolved child runs.
+- `pi-subagents` executes the resolved consult and round-table child runs.
 - `pi-intercom` is used only for supervisor contact while a child is running,
   not as the ordinary result transport.
 - Pi Persona does not hard-enforce doc, skill, or tool boundaries. Pi,
@@ -415,8 +427,6 @@ business-specific agent set:
 - `.pi/agents/_baseline.md`
 - `.pi/agents/generalist.md` with `role: generalist` and `primary: true`
 - `docs/shared/_index.md`
-- the project runtime override that lets the generalist use `subagent` for
-  consults
 
 The command should preserve existing files and report what it created versus
 what it left alone. It is setup assistance, not a policy gate. Users still add
@@ -442,7 +452,7 @@ The split is deliberate:
   file before applying it.
 - `/persona init --from <file>` is mechanical. It parses YAML, validates it,
   writes files, preserves existing content unless an explicit overwrite mode is
-  added, updates runtime overrides, and makes no creative decisions.
+  added, and makes no creative decisions.
 - `/persona init --plan --from <file>` is a dry run. It shows what would be
   created, preserved, warned, or rejected.
 - `/persona init status --from <file>` is a progress checklist derived from the
@@ -528,29 +538,9 @@ semantic fields, but it should not create a second agent registry.
 - prompt body
 
 Runtime adapter fields stay out of the scaffold unless the user explicitly asks
-for an advanced override.
-
-The scaffold may still update project runtime settings when the underlying Pi
-substrate requires it. For example, `pi-subagents` only registers the
-child-safe fanout `subagent` tool for a child whose resolved runtime config
-includes builtin `subagent` in `tools`. Pi Persona should provision that through
-`.pi/settings.json`:
-
-```json
-{
-  "subagents": {
-    "agentOverrides": {
-      "brand-strategist": {
-        "tools": ["subagent"]
-      }
-    }
-  }
-}
-```
-
-This is adapter-owned runtime wiring, not user-facing persona schema. The agent
-file still contains `skills`, not `tools`, and users should not have to maintain
-both.
+for an advanced override. Direct persona mode does not require a
+`.pi/settings.json` `tools: ["subagent"]` override because peer consults are
+owned by the top-level `persona_consult` tool, not by every child persona.
 
 When `/persona new <name> --role generalist` creates the first generalist, it
 should write `primary: true`. When a generalist already exists, it should still
@@ -705,15 +695,21 @@ it is the intended prompt, read-path, and native-skill shape.
 
 ### Tier 1 - Primary Generalist: `/<primary-generalist-name>`
 
-Starts the primary generalist Pi session, usually `/generalist` when the agent
-is named `generalist`. The primary generalist answers directly when shared
-context is enough. It consults specialists only when the task clearly needs a
-specialist perspective.
+Activates the primary generalist in the current Pi session, usually
+`/generalist` when the agent is named `generalist`. If the command includes a
+query, Pi answers that query as the generalist. Follow-up user messages keep the
+generalist active until another persona command switches personas or
+`/persona clear` exits persona mode. The primary generalist answers directly
+when shared context is enough and consults specialists only when the task
+clearly needs a specialist perspective.
 
 ### Tier 2 - Direct Specialist: `/<specialist-name>`
 
-Starts a role-aware specialist Pi session, such as `/brand-strategist` or
-`/launch-reviewer`.
+Activates a role-aware specialist in the current Pi session, such as
+`/brand-strategist` or `/launch-reviewer`. If the command includes a query, Pi
+answers that query as the specialist. Follow-up user messages keep the
+specialist active until another persona command switches personas or
+`/persona clear` exits persona mode.
 
 The specialist can consult known peers from the agent roster. Consulted agents
 receive a summarized/fresh consult by default, and their awareness package is
@@ -724,20 +720,61 @@ history.
 ### Tier 3 - Round-table: `/persona-roundtable <query>`
 
 The primary generalist selects up to five relevant specialists and convenes
-them into a short Delphi-style process.
+them into a short Delphi-style process. This is an explicit multi-persona
+workflow and may use `pi-subagents` internally.
 
 ### Discovery: `/persona-list`
 
 Lists the primary generalist, any non-primary generalists, and all specialists.
 It is read-only and does not launch anything. The list should show each
 persona's role, primary status where relevant, description, docs, and skills.
-Users launch agents directly with `/<agent-name>`.
+Users activate agents directly with `/<agent-name>`.
+
+### Persona State: `/persona status` and `/persona clear`
+
+`/persona status` shows the active persona for the current Pi session.
+`/persona clear` exits persona mode and returns the session to normal Pi
+behavior. Persona state is stored in the transcript so resumed sessions restore
+the latest selected persona.
+
+### Persona State In The Footer
+
+Pi Persona publishes the active persona through Pi's extension status API with
+the stable status key `pi-persona-active`. When no persona is active, the key is
+cleared. When a persona is active, the value is compact status text such as
+`persona /generalist`.
+
+This makes the state visible to Pi status surfaces without coupling Pi Persona
+to a specific footer implementation. With `npm:pi-powerline-footer`, users can
+promote the status key into a dedicated powerline item through
+`powerline.customItems`:
+
+```json
+{
+  "powerline": {
+    "preset": "default",
+    "customItems": [
+      {
+        "id": "persona",
+        "statusKey": "pi-persona-active",
+        "position": "secondary",
+        "color": "accent"
+      }
+    ]
+  }
+}
+```
+
+Pi Persona should not rewrite user footer settings automatically. Footer
+placement is a user preference; the extension's contract is the stable status
+key and timely updates on session start, persona switch, persona clear,
+`/persona status`, and agent turns.
 
 ### Setup Helper: `/persona init`
 
-Creates the minimal baseline, primary generalist, shared docs index, and
-generalist runtime override for an empty project. It preserves existing files
-and leaves real specialist content to the user.
+Creates the minimal baseline, primary generalist, and shared docs index for an
+empty project. It preserves existing files and leaves real specialist content to
+the user.
 
 Manifest-backed variants support richer setup:
 
@@ -753,18 +790,44 @@ Refreshes `_index.md` for one docs directory, or all declared docs directories
 when called with `--all` or no path. This is setup assistance only. It should
 not launch an agent and should not create a second docs system.
 
-Direct user launches create fresh sessions by default. Resume behavior uses Pi's
-native thread/session mechanism if available. Agent-to-agent consults also use
-fresh child context by default, seeded with a consult envelope and summary.
-Context forking is a deliberate option for cases that genuinely need the full
-history.
+Direct persona commands do not launch a child subagent. They activate persistent
+persona mode in the current Pi session by injecting the resolved persona
+instructions before agent turns. Agent-to-agent consults use fresh child context
+by default, seeded with a consult envelope and summary. Context forking is a
+deliberate consult option for cases that genuinely need the full history.
+
+### Current Direction - Active Persona And Consult Boundary
+
+These decisions supersede earlier Phase 4/7/8 proof language that treated
+direct persona commands as `pi-subagents` child runs:
+
+- Direct `/<persona> <query>` answers in the active Pi chat session.
+- Direct persona mode persists across follow-up turns until `/persona clear` or
+  another persona command.
+- Direct persona mode uses Pi's prompt hook for persona instructions and doc
+  read guidance. It does not depend on `pi-subagents` runtime `reads` or native
+  skill selection.
+- `persona_consult` is the semantic consult boundary. The active persona calls
+  it when peer expertise is needed; the tool executes `pi-subagents`
+  internally and returns the consultant result plus compact provenance.
+- Raw `subagent` guidance should not appear in direct persona prompts.
+- `subagent list` lists global Pi subagents: builtins, user package agents, and
+  project `.pi/agents` files. It is not the Pi Persona consultant roster.
+- `persona_consult` only accepts project Pi Persona agents discovered from the
+  active workspace. Global package agents can still be launched with raw
+  `subagent`, but doing so bypasses Pi Persona consult semantics, active
+  persona state, and provenance.
+- `/persona-roundtable` remains an explicit multi-persona workflow that may use
+  `pi-subagents` directly.
 
 ---
 
 ## 10. Consult Mechanism
 
-An active agent can invoke another agent by name from the known agent roster.
-The consulted agent runs through `pi-subagents`.
+An active persona can invoke another agent by name from the known agent roster
+through `persona_consult`. The tool resolves the consultant, runs the consulted
+agent through `pi-subagents`, and returns the consultant answer to the active
+persona for synthesis.
 
 There is no user-maintained consult allowlist. Agent descriptions are the
 primary routing signal: a requester should consult the persona whose
@@ -777,8 +840,8 @@ Default context policy:
 - Consults use summarized/fresh child context by default.
 - The requester may deliberately choose forked requester context instead.
 - The requesting agent writes the summary because it knows what is relevant
-  from its own conversation. The adapter transports the summary; it does not
-  decide what matters.
+  from its own conversation. The tool transports the summary; it does not decide
+  what matters.
 - A summarized consult uses a structured consult envelope plus the requester
   agent's concise summary.
 - Forked context, when selected, is reference context, not awareness-package
@@ -846,18 +909,15 @@ Topology:
 - `pi-intercom/contact_supervisor` is available for blocked decisions,
   structured clarification, or meaningful plan-changing updates. Routine
   consult completion returns through `pi-subagents`.
-- Child-safe fanout depends on the `pi-subagents` runtime contract: a child can
-  call `subagent` only when its resolved runtime config includes builtin
-  `subagent` in `tools`. Pi Persona should provision that in project runtime
-  settings for scaffolded personas and warn in `/persona doctor` when manually
-  created personas are missing it.
+- Direct persona mode does not require every persona to have a child-safe
+  `subagent` tool. The top-level active persona owns normal consult decisions
+  through `persona_consult`.
 
 One-hop consults are the default operating pattern because they are easier to
 debug and summarize. Pi Persona should discourage nested consults in prompts and
 make them visible in provenance if they occur; it should not add a permission
-system just to block them. The runtime `tools: ["subagent"]` override is not a
-Pi Persona restriction; it is the enablement required by `pi-subagents` for the
-consult mechanism to work inside a child.
+system just to block them. Nested consult support is not a direct-launch
+requirement and should not drive scaffold or doctor requirements by default.
 
 ---
 
@@ -982,7 +1042,8 @@ round-tables, and let users correct course.
 `/persona doctor` checks only the things the extension can know cheaply and
 reliably:
 
-- `pi-subagents` is installed, enabled, and discovering project agents.
+- `pi-subagents` is installed, enabled, and discovering project agents when
+  consult or round-table workflows are expected.
 - `pi-intercom` is installed, enabled, and available for child supervisor
   contact.
 - Agent markdown parses.
@@ -994,8 +1055,6 @@ reliably:
 - Declared doc directories with nested files have `_index.md` or receive a
   warning that points to `/persona index`.
 - Declared skills look like native `pi-subagents` skill names, not file paths.
-- Launchable personas have the project runtime override needed for child-safe
-  consult fanout, or a legacy-compatible `tools: subagent` declaration.
 - Legacy `tools`, `consults`, and `tags` fields are reported with migration
   guidance when present.
 - Copied runtime support roles include provenance metadata.
@@ -1041,28 +1100,32 @@ a valid file. The user can iterate.
 
 ## 16. Build Order
 
-1. **Runtime dependency audit.** Confirm `pi-subagents` and `pi-intercom` are
-   installed, loaded, and callable in the active Pi session.
+1. **Runtime capability audit.** Confirm Pi command, transcript-entry,
+   `sendUserMessage`, and `before_agent_start` hooks are available for active
+   persona mode. Confirm `pi-subagents` and `pi-intercom` are available for
+   consults, round-tables, and blocked child sessions.
 2. **Project agent surface.** Confirm `.pi/agents/**/*.md` discovery through
    `pi-subagents`, including how to exclude `_baseline.md` and how copied
    runtime roles should be named.
 3. **Schema and parser.** Lock the pi-persona metadata contract while retaining
    `pi-subagents` compatibility.
-4. **Resolver.** Merge baseline plus agent into a `pi-subagents` run spec.
+4. **Resolver.** Merge baseline plus agent into active persona instructions and
+   consult/round-table child run specs.
 5. **Consult summary audit.** Inspect Pi's native session summary behavior and
    use it as the baseline for consult summaries.
 6. **Baseline wiring.** Support `_baseline.md` and `docs/shared/`.
-7. **Direct specialist launch.** Launch `/<specialist-name>` sessions.
+7. **Direct specialist activation.** Activate `/<specialist-name>` in the
+   current Pi session.
 8. **Doctor.** Validate dependencies, schema, docs, skills, runtime
    compatibility, copied builtin provenance, and primary-generalist uniqueness.
 9. **Project init.** Add `/persona init` for the minimal baseline, primary
-   generalist, shared docs index, and runtime override.
+   generalist, and shared docs index.
 10. **Conversational authoring.** Create/edit agents through Pi.
-11. **Primary generalist launch.** Support direct launch of the configured
-    primary generalist, usually `/generalist`.
-12. **Consult mechanism.** Add one-hop peer consults with summarized/fresh
-    context by default and forked requester context as a deliberate envelope
-    option.
+11. **Primary generalist activation.** Support direct activation of the
+    configured primary generalist, usually `/generalist`.
+12. **Consult mechanism.** Add `persona_consult` as the one-hop peer consult
+    boundary, with summarized/fresh context by default and forked requester
+    context as a deliberate envelope option.
 13. **Round-table.** Add Delphi-style multi-specialist discourse through
     parallel `pi-subagents` runs.
 14. **Persona list.** Add read-only `/persona-list`.
@@ -1087,7 +1150,7 @@ Step 16 makes the user's initial operating layer real.
 | Decision | Resolution |
 |---|---|
 | Product boundary | Pi extension, not separate agent platform |
-| Runtime dependencies | `pi-subagents` and `pi-intercom` are required |
+| Runtime dependencies | Pi active-session hooks are required for direct persona mode; `pi-subagents` and `pi-intercom` support consults, round-tables, and blocked children |
 | Runtime design | Reuse required packages; do not build a parallel subagent system |
 | Default write policy | Inherit Pi and filesystem permissions |
 | User customization | 80% generic base, 20% user-defined agents/docs/skills |
@@ -1095,18 +1158,21 @@ Step 16 makes the user's initial operating layer real.
 | Runtime support roles | Copy/adapt builtins locally with provenance; symlinks only for local experiments |
 | Skill setup | Native `pi-subagents` skills; no custom Pi Persona skill-breadcrumb layer |
 | Doc setup | Workspace files referenced by path |
-| Docs transport | Pi Persona `docs` compiles to `pi-subagents` `reads` |
-| Direct launch | Fresh session; resume through Pi if available |
-| Persona discovery | `/persona-list` is read-only; launch with `/<agent-name>` |
+| Docs transport | Active persona mode injects doc-read guidance; consult and round-table child runs compile `docs` to `pi-subagents` `reads` |
+| Direct persona behavior | `/<agent-name> [query]` activates that persona in the current Pi session; no direct child subagent run |
+| Persona lifecycle | Another persona command switches personas; `/persona clear` exits; `/persona status` reports current state |
+| Persona discovery | `/persona-list` is read-only; activate with `/<agent-name>` |
 | Consult context | Summarized/fresh context by default; requester-context fork is deliberate |
 | Consult summary author | Requesting agent writes the summary |
 | Consult summary baseline | Use Pi native summary behavior first; add rules only if needed |
 | Consult provenance | Compact footer in the requester synthesis |
 | Consult awareness | Consultant awareness package resolves from consultant file plus baseline |
-| Consult topology | One-hop by default, parallel fan-out, barrier fan-in through `pi-subagents` |
+| Consult execution | `persona_consult` executes `pi-subagents` internally and returns the consultant result for active-persona synthesis |
+| Consult topology | One-hop by default, parallel fan-out when explicitly requested, barrier fan-in through `pi-subagents` |
 | Consult routing | Any known persona may be consulted; descriptions guide who to ask |
 | Primary generalist | Exactly one `role: generalist` with `primary: true` |
 | Round-table membership | Ad hoc, up to five specialists |
+| Round-table execution | `/persona-roundtable` remains an explicit multi-persona workflow and may use `pi-subagents` directly |
 | Discourse protocol | Independent, reveal/revise, synthesize |
 | Supervisor bridge | `pi-intercom/contact_supervisor` only for blocked or plan-changing updates |
 | Routing | Simple first; optimize only after user-reported misses |
@@ -1124,9 +1190,9 @@ features.
 
 **Test 1.1 - Required dependency audit.**
 Run `/persona doctor` in a session with both packages installed and in a session
-where one package is missing or disabled. Pass: both required packages are
-detected when present; missing or disabled dependency produces a blocking,
-actionable error.
+where one package is missing or disabled. Pass: both packages are detected when
+present; missing or disabled `pi-subagents`/`pi-intercom` produces actionable
+consult/round-table readiness guidance without blocking direct persona mode.
 
 **Test 1.2 - Project agent discovery.**
 Create a valid `.pi/agents/<name>.md` persona file. Pass: `pi-subagents`
@@ -1166,8 +1232,8 @@ selected specialist native skill names as `skill`.
 
 **Test 3.0 - Project init.**
 Run `/persona init` in an empty project. Pass: `_baseline.md`,
-`generalist.md`, `docs/shared/_index.md`, and the generalist subagent runtime
-override are created; running it again preserves existing files.
+`generalist.md`, and `docs/shared/_index.md` are created; running it again
+preserves existing files.
 
 **Test 3.1 - Conversational agent creation.**
 Ask Pi to create a new specialist for a concrete workstream. Pass: a valid
@@ -1196,22 +1262,24 @@ name through to `pi-subagents` as native skill selection.
 ### Phase 4 - Direct Launch
 
 **Test 4.1 - Specialist command.**
-Invoke `/<specialist-name>`. Pass: a fresh role-aware Pi session starts with the
-agent prompt, doc-derived `reads`, and native skill names.
+Invoke `/<specialist-name>`. Pass: the active Pi session records that specialist
+as the active persona and future agent turns receive the specialist prompt,
+baseline context, roster, and doc-read guidance.
 
 **Test 4.1a - Directory docs are shallow by default.**
 Declare a docs directory containing `_index.md`, a first-layer file, and a
-nested file. Pass: the child run receives `_index.md` and the first-layer file
-as runtime reads, does not include the nested file in reads, and the prompt
-states that nested docs are available through progressive discovery.
+nested file. Pass: active persona prompt guidance names `_index.md` and the
+first-layer file, does not eagerly list the nested file as a direct read target,
+and states that nested docs are available through progressive discovery.
 
-**Test 4.2 - Fresh session default.**
-Launch the same specialist twice. Pass: the second launch does not inherit
-unrequested conversational state from the first.
+**Test 4.2 - Persistent persona mode.**
+Activate a specialist and send a follow-up user message. Pass: the follow-up
+turn still receives that specialist's active persona instructions.
 
-**Test 4.3 - Resume path.**
-Resume a prior specialist session using Pi's native mechanism. Pass: state
-restores only when explicitly resumed.
+**Test 4.3 - Clear and switch.**
+Run `/persona clear` and then a follow-up user message. Pass: persona
+instructions are no longer injected. Activate another persona. Pass: the new
+persona replaces the previous one.
 
 ### Phase 5 - Primary Generalist And Consults
 
@@ -1221,8 +1289,8 @@ without consulting a specialist.
 
 **Test 5.2 - Specialist consult.**
 Ask a question that clearly needs a peer described in the roster. Pass: the
-active agent consults that peer through `pi-subagents`, receives a result, and
-synthesizes it.
+active persona calls `persona_consult`, the tool runs the peer through
+`pi-subagents`, and the active persona receives the result for synthesis.
 
 **Test 5.2a - Summarized/fresh default.**
 Create requester context, then trigger a consult without specifying context
@@ -1265,11 +1333,8 @@ is reported, and work continues.
 **Test 5.5 - Nested consult guidance.**
 Have a consulted agent attempt a nested consult. Pass: pi-persona discourages
 the nested consult in instructions and shows it in provenance if it happens.
-For scaffolded personas, `.pi/settings.json` provides the `pi-subagents`
-`tools: ["subagent"]` runtime override needed for child-safe fanout. For
-manually created personas without that override, `/persona doctor` warns with a
-specific remediation. There is no separate Pi Persona consult permission
-system.
+Scaffold and doctor do not require every direct persona to have child-safe
+`subagent` fanout. There is no separate Pi Persona consult permission system.
 
 **Test 5.6 - Supervisor bridge.**
 Have a consulted agent encounter a blocking decision. Pass: it uses
@@ -1303,8 +1368,8 @@ action without flattening disagreement.
 
 **Test 7.1 - Full workflow.**
 Run: verify dependencies, create agent, deploy docs, deploy skills, doctor,
-direct launch, generalist consult, round-table. Pass: each layer works without
-changing extension code or choosing between two agent systems.
+direct persona activation, generalist consult, round-table. Pass: each layer
+works without changing extension code or choosing between two agent systems.
 
 **Test 7.2 - Persona listing.**
 Run `/persona-list`. Pass: it lists role, description, docs, and skills,
@@ -1329,8 +1394,8 @@ until one and only one generalist is set to `primary: true`.
 These are implementation questions, not product blockers:
 
 - What exact command surface should the extension use in Pi?
-- What is the cleanest programmatic call path into `pi-subagents` for direct
-  launch, consult, parallel round-table, status, resume, and interrupt?
+- What is the cleanest programmatic call path into `pi-subagents` for consult,
+  parallel round-table, status, resume, and interrupt?
 - Does `pi-subagents` tolerate all pi-persona metadata fields directly, or
   should `/persona doctor` constrain field shape more tightly?
 - What is the exact convention for excluding `_baseline.md` from launchable
@@ -1343,8 +1408,8 @@ These are implementation questions, not product blockers:
   turning pi-persona into a tool policy layer?
 - Can Pi expose model choice to extensions?
 - Can Pi load declared docs as context without granting broad doc access?
-- How should direct persona session resume map onto Pi and `pi-subagents`
-  resume semantics?
+- Can Pi expose parent-chat runtime `reads` or native skill selection to
+  extensions, or should active persona mode remain prompt-injection based?
 
 Answer these during the runtime dependency audit. Keep the blueprint thin until
 the actual scaffold proves what is possible.

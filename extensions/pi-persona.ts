@@ -9,7 +9,7 @@ import {
   applyPersonaInitFromManifest,
   discoverPersonaProject,
   formatAgentScaffoldCreatedMessage,
-  formatConsultSubagentInstructions,
+  formatConsultBridgeResult,
   formatDocsIndexReport,
   formatDoctorReport,
   formatPersonaInitManifestReport,
@@ -29,6 +29,7 @@ import {
   statusPersonaInitFromManifest,
 } from "../src/persona/index.js";
 
+const ACTIVE_PERSONA_STATE_TYPE = "pi-persona-active";
 const REGISTERED_PERSONA_COMMANDS = new Set<string>();
 const PROGRESS_FRAMES = ["-", "\\", "|", "/"];
 const VISIBLE_PROGRESS_MS = 8_000;
@@ -50,11 +51,38 @@ const RESERVED_COMMANDS = new Set([
 ]);
 
 export default function registerPiPersona(pi: ExtensionAPI): void {
+  let activePersonaName: string | undefined;
+
+  const updateActivePersonaStatus = (ctx: any) => {
+    ctx.ui?.setStatus?.(
+      "pi-persona-active",
+      activePersonaName ? `persona /${activePersonaName}` : undefined,
+    );
+  };
+
+  const restoreActivePersona = (ctx: any) => {
+    activePersonaName = undefined;
+    const entries = ctx.sessionManager?.getEntries?.() ?? [];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.type !== "custom" || entry.customType !== ACTIVE_PERSONA_STATE_TYPE) continue;
+      const agentName = entry.data?.agentName;
+      activePersonaName = typeof agentName === "string" && agentName ? agentName : undefined;
+      return;
+    }
+  };
+
+  const setActivePersona = (ctx: any, agentName: string | undefined) => {
+    activePersonaName = agentName;
+    pi.appendEntry(ACTIVE_PERSONA_STATE_TYPE, { agentName: agentName ?? null });
+    updateActivePersonaStatus(ctx);
+  };
+
   pi.registerTool({
     name: "persona_consult",
     label: "Persona Consult",
-    description: "Prepare a Pi Persona peer consult request for a known persona. Execute the returned request with the child-safe pi-subagents subagent tool.",
-    promptSnippet: "Use persona_consult only when you need Pi Persona to validate and prepare a consult envelope. Then call the subagent tool with the returned request.",
+    description: "Ask a known Pi Persona peer for a focused consult. The tool runs the child-safe pi-subagents request internally and returns the result.",
+    promptSnippet: "Use persona_consult only when the active Pi Persona needs another known persona's expertise. Provide a narrow requester-written summary and synthesize the returned consultant answer.",
     parameters: Type.Object({
       requester: Type.String({ description: "Active Pi Persona requester agent name" }),
       consultant: Type.String({ description: "Known Pi Persona consultant agent name" }),
@@ -67,18 +95,27 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         description: "fresh by default; fork only when full conversation context is deliberately required",
       })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       try {
         const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
-        const text = formatConsultSubagentInstructions(consult);
+        const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams, {
+          onUpdate(update: unknown) {
+            onUpdate?.({
+              content: [{ type: "text", text: formatSubagentProgress(update, consult.consultant.name) }],
+              details: update,
+            });
+          },
+        });
+        const text = formatConsultBridgeResult(consult, bridgeResponseText(response), response.isError === true);
         return {
           content: [{ type: "text", text }],
-          isError: false,
+          isError: response.isError === true,
           details: {
             requester: consult.requester.name,
             consultant: consult.consultant.name,
             context: consult.context,
             subagentParams: consult.subagentParams,
+            result: response.result,
           },
         };
       } catch (error) {
@@ -97,28 +134,21 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     if (REGISTERED_PERSONA_COMMANDS.has(agentName)) return;
 
     pi.registerCommand(agentName, {
-      description: `Start Pi Persona agent: ${agentName}`,
+      description: `Activate Pi Persona agent: ${agentName}`,
       handler: async (args, ctx) => {
         try {
-          const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, { task: args });
-          const progress = createPersonaLaunchProgress(pi, ctx, agentName);
-          sendPersonaOutput(
-            pi,
-            ctx,
-            `Launching ${agentName}...\n\nPersona is running. Watch the Pi status line for live progress; compact updates will appear until the result returns.`,
-            "info",
-          );
-          try {
-            const response = await runSubagentBridgeRequest(pi, ctx, launch.subagentParams, {
-              onUpdate(update: unknown) {
-                progress.update(update);
-              },
-            });
-            const text = bridgeResponseText(response);
-            sendPersonaOutput(pi, ctx, `## ${agentName}\n\n${text}`, response.isError ? "error" : "info");
-          } finally {
-            progress.stop();
+          const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, {
+            task: normalizeCommandText(args),
+          });
+          setActivePersona(ctx, launch.agentName);
+          if (!launch.userMessage) {
+            ctx.ui.notify(`Active persona: /${launch.agentName}`, "info");
+            return;
           }
+          pi.sendUserMessage(
+            launch.userMessage,
+            ctx.isIdle() ? undefined : { deliverAs: "followUp" },
+          );
         } catch (error) {
           sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
         }
@@ -137,17 +167,52 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     try {
+      restoreActivePersona(ctx);
+      updateActivePersonaStatus(ctx);
       await registerProjectCommands(ctx.cwd);
     } catch (error) {
       console.error("Failed to register Pi Persona commands:", error);
     }
   });
 
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (!activePersonaName) return undefined;
+    updateActivePersonaStatus(ctx);
+    try {
+      const launch = await resolveAgentLaunchRequest(ctx.cwd, activePersonaName);
+      return {
+        systemPrompt: `${event.systemPrompt}\n\n${launch.systemPrompt}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        systemPrompt: `${event.systemPrompt}\n\n## Pi Persona\n\nActive persona /${activePersonaName} could not be resolved: ${message}. Answer normally and tell the user to run /persona status or /persona clear.`,
+      };
+    }
+  });
+
   pi.registerCommand("persona", {
-    description: "Pi Persona commands. Supports: /persona init, /persona doctor, /persona new <name>, /persona index [docs-dir]",
+    description: "Pi Persona commands. Supports: /persona init, /persona doctor, /persona new <name>, /persona index [docs-dir], /persona status, /persona clear",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
+
+      if (subcommand === "status") {
+        sendPersonaOutput(
+          pi,
+          ctx,
+          activePersonaName ? `Active persona: /${activePersonaName}` : "Active persona: none",
+          "info",
+        );
+        updateActivePersonaStatus(ctx);
+        return;
+      }
+
+      if (subcommand === "clear") {
+        setActivePersona(ctx, undefined);
+        sendPersonaOutput(pi, ctx, "Active persona: none", "info");
+        return;
+      }
 
       if (subcommand === "doctor") {
         const result = await runDoctor(ctx.cwd);
@@ -311,6 +376,8 @@ function personaUsage(): string {
     "Usage: /persona init --plan --from <file>",
     "Usage: /persona init --from <file>",
     "Usage: /persona init status --from <file>",
+    "Usage: /persona status",
+    "Usage: /persona clear",
     "Usage: /persona doctor",
     "Usage: /persona new <name> [--role generalist|specialist] [--description \"...\"] [--docs path[,path]] [--skills native-skill[,native-skill]]",
     "Usage: /persona index [docs-dir]",
@@ -325,17 +392,6 @@ function createRoundtableProgress(pi: ExtensionAPI, ctx: any) {
     visibleLabel: "Round-table progress",
     format(update: unknown) {
       return formatSubagentProgress(update);
-    },
-  });
-}
-
-function createPersonaLaunchProgress(pi: ExtensionAPI, ctx: any, agentName: string) {
-  return createProgressReporter(pi, ctx, {
-    statusKey: "pi-persona-launch",
-    statusLabel: agentName,
-    visibleLabel: `${agentName} progress`,
-    format(update: unknown) {
-      return formatSubagentProgress(update, agentName);
     },
   });
 }

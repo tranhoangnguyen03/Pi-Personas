@@ -2,7 +2,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { discoverPersonaProject } from "./agents.js";
-import { ensureNestedConsultRuntimeOverride } from "./settings.js";
 
 const ALLOWED_OPTIONS = new Set(["role", "description", "docs", "skills"]);
 const LIST_OPTIONS = new Set(["docs", "skills"]);
@@ -116,7 +115,6 @@ export async function createAgentScaffold(root, rawName, options = {}) {
   await mkdir(path.dirname(filePath), { recursive: true });
   try {
     await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
-    await ensureNestedConsultRuntimeOverride(root, agentName);
   } catch (error) {
     if (error?.code === "EEXIST") {
       throw new Error(`agent file already exists: ${relativePath}`);
@@ -157,7 +155,6 @@ export async function createPersonaProjectScaffold(root) {
     skipped,
   );
   await writeScaffoldFile(root, "docs/shared/_index.md", renderSharedDocsIndexScaffold(), created, skipped);
-  await ensureNestedConsultRuntimeOverride(root, "generalist");
 
   return {
     created,

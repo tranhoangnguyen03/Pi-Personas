@@ -1,24 +1,18 @@
 import { resolveAgentScope } from "./resolver.js";
 import { getPrimaryGeneralistState } from "./agents.js";
-import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
-
-const DEFAULT_EMPTY_TASK = "Start a fresh role-aware persona session. Ask the user what they need if no request was supplied.";
+import { formatDocReadPreamble } from "./runtime.js";
 
 export function buildAgentLaunchRequest(scope, options = {}) {
-  const context = options.context === "fork" ? "fork" : "fresh";
-  const userTask = normalizeTask(options.task);
-  const task = buildLaunchTask(scope, userTask);
-  const subagentParams = buildScopedSubagentParams(scope, task, { context });
-
   return {
     agentName: scope.agent.name,
-    context,
+    context: "active",
+    userMessage: normalizeTask(options.task),
     docs: scope.docs,
     skills: scope.skills,
     tools: scope.tools,
     consults: scope.consults,
     tags: scope.tags,
-    subagentParams,
+    systemPrompt: buildActivePersonaSystemPrompt(scope),
   };
 }
 
@@ -50,36 +44,42 @@ export function formatPersonaList(project) {
   return lines.join("\n");
 }
 
-function buildLaunchTask(scope, userTask) {
+function buildActivePersonaSystemPrompt(scope) {
   const sections = [];
   const docPreamble = formatDocReadPreamble(scope);
   if (docPreamble) sections.push(docPreamble);
 
   sections.push([
-    "## Pi Persona Awareness",
+    "## Active Pi Persona",
     "",
+    `You are the active Pi Persona \`${scope.agent.name}\` for this chat session.`,
     `Agent: ${scope.agent.name}`,
     `Role: ${scope.agent.role}`,
     `Description: ${scope.agent.description}`,
     `Docs: ${scope.docs.length ? scope.docs.join(", ") : "none"}`,
     `Skills: ${scope.skills.length ? scope.skills.join(", ") : "none"}`,
+    "",
+    "Answer the user's current request directly as this persona, using the active Pi chat session.",
+    "Do not start a pi-subagents child run to answer a direct persona command.",
+    "Stay in this persona until the user switches personas or runs /persona clear.",
   ].join("\n"));
 
   sections.push([
     "## Consult Execution",
     "",
-    "Tool: subagent",
-    "Consult known personas from the roster when specialist expertise is useful.",
+    "Tool: persona_consult",
+    "Consult known personas from the roster only when another persona's expertise is useful.",
     `requester: ${scope.agent.name}`,
     "Known personas:",
     ...formatRosterLines(scope.agentRoster),
+    "Use only the known personas above as Pi Persona consultants.",
+    "Do not use raw `subagent list` to discover Pi Persona consultants; that list is global Pi runtime discovery.",
+    "Raw `subagent` launches are global Pi runtime behavior and bypass Pi Persona consult semantics, active persona state, and provenance.",
     "Default consult context: fresh",
     "Use context: fork only when the request genuinely requires full conversation context.",
     "You, the requesting agent, must write the consult summary before calling the consultant.",
-    "Include these fields in the consultant task: requester, consultant, context, summary, question, constraints, expectedOutput.",
-    "After the subagent result returns, synthesize the answer and append compact provenance when useful:",
-    "Consulted:",
-    "- <consultant> (answered|failed): <one-line summary>",
+    "Call persona_consult with requester, consultant, context, summary, question, constraints, and expectedOutput.",
+    "After persona_consult returns, synthesize the answer and preserve its compact provenance when useful.",
   ].join("\n"));
 
   const baseline = scope.promptSections.find((section) => section.label === "Baseline")?.body;
@@ -87,7 +87,11 @@ function buildLaunchTask(scope, userTask) {
     sections.push(["## Baseline Context", "", baseline].join("\n"));
   }
 
-  sections.push(["## User Request", "", userTask].join("\n"));
+  const agent = scope.promptSections.find((section) => section.label === "Agent")?.body;
+  if (agent) {
+    sections.push(["## Agent Instructions", "", agent].join("\n"));
+  }
+
   return sections.join("\n\n");
 }
 
@@ -96,7 +100,7 @@ function formatRosterLines(agentRoster = []) {
 }
 
 function normalizeTask(task) {
-  if (typeof task !== "string") return DEFAULT_EMPTY_TASK;
+  if (typeof task !== "string") return undefined;
   const trimmed = task.trim();
-  return trimmed || DEFAULT_EMPTY_TASK;
+  return trimmed || undefined;
 }

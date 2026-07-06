@@ -26,6 +26,13 @@ The metadata shape in this export is also historical. The current design uses
 as legacy migration fields. Future runtime proof should show skills in
 `/persona-list` and scaffold output instead of consult peers or tool metadata.
 
+The direct-launch execution model in this export is also superseded. Phase 7
+proved the older shortcut where `/<persona>` launched a `pi-subagents` child
+run. The current direction is persistent active persona mode: `/<persona>
+[query]` activates that persona in the current Pi chat session, and
+`pi-subagents` is used only behind `persona_consult` or explicit
+`/persona-roundtable` workflows.
+
 ## Runtime Environment
 
 | Item | Evidence | Verdict |
