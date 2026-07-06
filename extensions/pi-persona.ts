@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import {
+  assertPersonaRuntimeReady,
   createAgentScaffold,
   createDocsIndex,
   createPersonaInitDraft,
@@ -102,6 +103,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       try {
         const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
+        await assertPersonaRuntimeReady(ctx.cwd);
         const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams, {
           onUpdate(update: unknown) {
             onUpdate?.({
@@ -326,6 +328,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       try {
         await registerProjectCommands(ctx.cwd);
         const roundtable = await resolveRoundtableLaunchRequest(ctx.cwd, { query });
+        await assertPersonaRuntimeReady(ctx.cwd);
         const preview = formatRoundtableRosterPreview(roundtable);
         const progress = createRoundtableProgress(pi, ctx);
         sendPersonaOutput(

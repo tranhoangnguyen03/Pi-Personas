@@ -35,6 +35,7 @@ import {
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
+  assertPersonaRuntimeReady,
   runSubagentBridgeRequest,
   runDoctor,
   sendPersonaOutput,
@@ -209,6 +210,7 @@ test("extension registers the persona_consult tool", async () => {
   assert.match(source, /formatConsultBridgeResult/);
   assert.match(consultToolBlock, /runSubagentBridgeRequest/);
   assert.match(consultToolBlock, /extractConsultAnswer/);
+  assert.match(consultToolBlock, /assertPersonaRuntimeReady/);
   assert.doesNotMatch(consultToolBlock, /formatConsultSubagentInstructions/);
 });
 
@@ -247,6 +249,24 @@ test("extension registers persona-roundtable as a namespaced command", async () 
   assert.match(source, /onUpdate/);
   assert.match(source, /statusKey:\s*"pi-persona-roundtable"/);
   assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
+  assert.match(source, /assertPersonaRuntimeReady/);
+});
+
+test("extension preflights runtime dependencies before bridge execution", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const consultToolBlock = source.slice(
+    source.indexOf('name: "persona_consult"'),
+    source.indexOf("const registerPersonaCommand"),
+  );
+  const roundtableBlock = source.slice(
+    source.indexOf('pi.registerCommand("persona-roundtable"'),
+    source.indexOf("function isSafeCommandName"),
+  );
+
+  assert.ok(consultToolBlock.indexOf("assertPersonaRuntimeReady") >= 0);
+  assert.ok(roundtableBlock.indexOf("assertPersonaRuntimeReady") >= 0);
+  assert.ok(consultToolBlock.indexOf("assertPersonaRuntimeReady") < consultToolBlock.indexOf("runSubagentBridgeRequest"));
+  assert.ok(roundtableBlock.indexOf("assertPersonaRuntimeReady") < roundtableBlock.indexOf("runSubagentBridgeRequest"));
 });
 
 test("extension stores active persona state for direct persona mode", async () => {
@@ -309,6 +329,8 @@ test("docs document active persona footer and global subagent list behavior", as
   assert.match(blueprint, /`persona_consult` only accepts project Pi Persona agents/);
   assert.match(blueprint, /bootstrap command/);
   assert.match(blueprint, /falling through as ordinary prompt text/);
+  assert.match(blueprint, /pi install npm:pi-subagents/);
+  assert.match(blueprint, /runtime preflight/);
   assert.match(blueprint, /PI_SUBAGENT_CHILD/);
   assert.match(blueprint, /leaf task/);
   assert.doesNotMatch(blueprint, /child supervisor/);
@@ -499,6 +521,37 @@ test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () =>
   }
 });
 
+test("doctor detects runtime package configuration from user and project settings", async () => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "9.9.1" })}\n`,
+  );
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-intercom/package.json"),
+    `${JSON.stringify({ version: "9.9.2" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({ packages: ["npm:pi-intercom"] })}\n`);
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const result = await runDoctor(root);
+    assert.equal(result.dependencies.piSubagents.configured, true);
+    assert.equal(result.dependencies.piIntercom.configured, true);
+    assert.match(formatDoctorReport(result), /pi-subagents: 9\.9\.1 at .*configured/);
+    assert.match(formatDoctorReport(result), /pi-intercom: 9\.9\.2 at .*configured/);
+  } finally {
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+  }
+});
+
 test("doctor warns but keeps direct mode available when child runtime packages are missing", async () => {
   const root = await createWorkspace();
 
@@ -512,6 +565,41 @@ test("doctor warns but keeps direct mode available when child runtime packages a
   assert.equal(result.status, "warning");
   assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-subagents missing; consults and round-tables are unavailable")));
   assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-intercom missing; native child result delivery may be unavailable")));
+});
+
+test("doctor warns when runtime packages are installed but not configured", async () => {
+  const root = await createWorkspace();
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, configured: false, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
+      piIntercom: { ok: true, configured: false, version: "0.6.0", path: "/tmp/pi-intercom", packageSource: "npm:pi-intercom" },
+    },
+  });
+
+  assert.equal(result.status, "warning");
+  assert.match(formatDoctorReport(result), /pi-subagents: 0\.33\.1 at \/tmp\/pi-subagents \(not configured in Pi settings\)/);
+  assert.ok(result.issues.some((issue) => issue.message.includes("pi-subagents installed but not configured in Pi settings; run `pi install npm:pi-subagents`")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("pi-intercom installed but not configured in Pi settings; run `pi install npm:pi-intercom`")));
+});
+
+test("runtime dependency preflight returns install and configuration guidance", async () => {
+  await assert.rejects(
+    () => assertPersonaRuntimeReady("/tmp/example", {
+      dependencyStatus: {
+        piSubagents: { ok: true, configured: false, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
+        piIntercom: { ok: false, configured: false, path: "/tmp/pi-intercom", packageSource: "npm:pi-intercom" },
+      },
+    }),
+    (error) => {
+      assert.match(error.message, /Pi Persona consults and round-tables require runtime packages/);
+      assert.match(error.message, /pi-subagents is installed but not configured/);
+      assert.match(error.message, /pi install npm:pi-subagents/);
+      assert.match(error.message, /pi-intercom is missing/);
+      assert.match(error.message, /pi install npm:pi-intercom/);
+      return true;
+    },
+  );
 });
 
 test("doctor does not require per-persona subagent runtime provisioning", async () => {

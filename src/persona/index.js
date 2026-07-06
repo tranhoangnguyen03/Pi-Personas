@@ -13,7 +13,7 @@ export {
   parsePersonaIndexArgs,
 } from "./doc-index.js";
 export { discoverPersonaProject } from "./agents.js";
-export { formatDoctorReport, runDoctor } from "./doctor.js";
+export { assertPersonaRuntimeReady, formatDoctorReport, runDoctor } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
 export {
   applyPersonaInitFromManifest,

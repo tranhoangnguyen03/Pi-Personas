@@ -156,10 +156,23 @@ Required packages for consults, round-tables, and native child-result delivery:
 - `pi-subagents`
 - `pi-intercom`
 
+Install or configure them as Pi packages, not only nested npm dependencies:
+
+```sh
+pi install npm:pi-subagents
+pi install npm:pi-intercom
+```
+
 The extension should refuse to run consults and round-tables until the relevant
 package is installed and visible to Pi. Direct persona activation should still
 work when these packages are missing, with doctor reporting consult/round-table
 readiness separately from direct-mode readiness.
+
+`/persona doctor` reports dependency readiness in layers: package present on
+disk, package configured in user or project Pi settings, and actionable install
+commands when a runtime package is missing or unconfigured. `persona_consult`
+and `/persona-roundtable` also perform a runtime preflight before using the
+`pi-subagents` bridge so users get install guidance instead of a bridge timeout.
 
 Required Pi capabilities:
 
