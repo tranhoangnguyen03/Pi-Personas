@@ -8,6 +8,7 @@ import {
   createPersonaProjectScaffold,
   applyPersonaInitFromManifest,
   discoverPersonaProject,
+  extractConsultAnswer,
   formatAgentScaffoldCreatedMessage,
   formatConsultBridgeResult,
   formatDocsIndexReport,
@@ -33,6 +34,7 @@ const ACTIVE_PERSONA_STATE_TYPE = "pi-persona-active";
 const REGISTERED_PERSONA_COMMANDS = new Set<string>();
 const PROGRESS_FRAMES = ["-", "\\", "|", "/"];
 const VISIBLE_PROGRESS_MS = 8_000;
+const IS_PI_SUBAGENT_CHILD = process.env.PI_SUBAGENT_CHILD === "1";
 const RESERVED_COMMANDS = new Set([
   "agent",
   "chain",
@@ -51,6 +53,8 @@ const RESERVED_COMMANDS = new Set([
 ]);
 
 export default function registerPiPersona(pi: ExtensionAPI): void {
+  if (IS_PI_SUBAGENT_CHILD) return;
+
   let activePersonaName: string | undefined;
 
   const updateActivePersonaStatus = (ctx: any) => {
@@ -60,9 +64,8 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     );
   };
 
-  const restoreActivePersona = (ctx: any) => {
-    activePersonaName = undefined;
-    const entries = ctx.sessionManager?.getEntries?.() ?? [];
+  const restoreActivePersona = (ctx: any, options: { resetIfMissing?: boolean } = {}) => {
+    const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (entry?.type !== "custom" || entry.customType !== ACTIVE_PERSONA_STATE_TYPE) continue;
@@ -70,6 +73,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       activePersonaName = typeof agentName === "string" && agentName ? agentName : undefined;
       return;
     }
+    if (options.resetIfMissing) activePersonaName = undefined;
   };
 
   const setActivePersona = (ctx: any, agentName: string | undefined) => {
@@ -106,15 +110,17 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             });
           },
         });
-        const text = formatConsultBridgeResult(consult, bridgeResponseText(response), response.isError === true);
+        const answer = await extractConsultAnswer(response);
+        const text = formatConsultBridgeResult(consult, answer.text, response.isError === true || answer.source === "missing");
         return {
           content: [{ type: "text", text }],
-          isError: response.isError === true,
+          isError: response.isError === true || answer.source === "missing",
           details: {
             requester: consult.requester.name,
             consultant: consult.consultant.name,
             context: consult.context,
             subagentParams: consult.subagentParams,
+            answer,
             result: response.result,
           },
         };
@@ -150,12 +156,14 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             ctx.isIdle() ? undefined : { deliverAs: "followUp" },
           );
         } catch (error) {
-          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+          sendPersonaOutput(pi, ctx, formatPersonaCommandError(agentName, error), "error");
         }
       },
     });
     REGISTERED_PERSONA_COMMANDS.add(agentName);
   };
+
+  registerPersonaCommand("generalist");
 
   const registerProjectCommands = async (cwd: string) => {
     const project = await discoverPersonaProject(cwd);
@@ -167,7 +175,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     try {
-      restoreActivePersona(ctx);
+      restoreActivePersona(ctx, { resetIfMissing: true });
       updateActivePersonaStatus(ctx);
       await registerProjectCommands(ctx.cwd);
     } catch (error) {
@@ -176,7 +184,11 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (!activePersonaName) return undefined;
+    restoreActivePersona(ctx);
+    if (!activePersonaName) {
+      updateActivePersonaStatus(ctx);
+      return undefined;
+    }
     updateActivePersonaStatus(ctx);
     try {
       const launch = await resolveAgentLaunchRequest(ctx.cwd, activePersonaName);
@@ -198,6 +210,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
 
       if (subcommand === "status") {
+        restoreActivePersona(ctx);
         sendPersonaOutput(
           pi,
           ctx,
@@ -367,6 +380,14 @@ function normalizeCommandText(value: string): string {
     }
   }
   return trimmed;
+}
+
+function formatPersonaCommandError(agentName: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (agentName === "generalist" && message === "Unknown agent: generalist") {
+    return "No Pi Persona `/generalist` agent found. Run `/persona init` first, or use `/persona-list` if this project uses a different primary persona name.";
+  }
+  return message;
 }
 
 function personaUsage(): string {

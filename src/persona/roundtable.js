@@ -111,7 +111,9 @@ function buildRoundOneTask(scope, query, roster) {
     `Query: ${query}`,
     "",
     "Give your independent specialist position. Do not reference peer answers; you have not seen them yet.",
-    "Stay inside this round-table unless you are blocked and need supervisor help.",
+    "This round-table step is a leaf task.",
+    "Do not call `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or `intercom`.",
+    "If blocked, report the blocker in your returned answer.",
   ].join("\n"));
 }
 
@@ -129,7 +131,9 @@ function buildRoundTwoTask(scope, query, roster) {
     "{previous}",
     "",
     "Revise, qualify, reinforce, or concede your position after reading the peer positions.",
-    "Stay inside this round-table unless you are blocked and need supervisor help.",
+    "This round-table step is a leaf task.",
+    "Do not call `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or `intercom`.",
+    "If blocked, report the blocker in your returned answer.",
   ].join("\n"));
 }
 

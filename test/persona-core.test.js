@@ -12,6 +12,7 @@ import {
   createPersonaProjectScaffold,
   discoverPersonaProject,
   createAgentScaffold,
+  extractConsultAnswer,
   formatAgentScaffoldCreatedMessage,
   formatConsultBridgeResult,
   formatConsultProvenance,
@@ -204,8 +205,10 @@ test("extension registers the persona_consult tool", async () => {
   assert.match(source, /registerTool\(/);
   assert.match(source, /name:\s*"persona_consult"/);
   assert.match(source, /resolveConsultLaunchRequest/);
+  assert.match(source, /extractConsultAnswer/);
   assert.match(source, /formatConsultBridgeResult/);
   assert.match(consultToolBlock, /runSubagentBridgeRequest/);
+  assert.match(consultToolBlock, /extractConsultAnswer/);
   assert.doesNotMatch(consultToolBlock, /formatConsultSubagentInstructions/);
 });
 
@@ -222,6 +225,17 @@ test("extension direct persona commands activate the current chat instead of the
   assert.match(source, /before_agent_start/);
   assert.match(source, /\/persona status/);
   assert.match(source, /\/persona clear/);
+});
+
+test("extension bootstraps /generalist before project agents exist", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const bootstrapIndex = source.indexOf('registerPersonaCommand("generalist")');
+  const sessionStartIndex = source.indexOf('pi.on("session_start"');
+
+  assert.ok(bootstrapIndex >= 0);
+  assert.ok(bootstrapIndex < sessionStartIndex);
+  assert.match(source, /\/persona init/);
+  assert.match(source, /No Pi Persona `\/generalist` agent found/);
 });
 
 test("extension registers persona-roundtable as a namespaced command", async () => {
@@ -241,14 +255,37 @@ test("extension stores active persona state for direct persona mode", async () =
     source.indexOf('pi.on("before_agent_start"'),
     source.indexOf('pi.registerCommand("persona"'),
   );
+  const statusBlock = source.slice(
+    source.indexOf('if (subcommand === "status")'),
+    source.indexOf('if (subcommand === "clear")'),
+  );
 
   assert.match(source, /ACTIVE_PERSONA_STATE_TYPE/);
   assert.match(source, /appendEntry\(ACTIVE_PERSONA_STATE_TYPE/);
   assert.match(source, /restoreActivePersona/);
+  assert.match(source, /getBranch\?\.\(\)/);
+  assert.match(source, /resetIfMissing/);
   assert.match(source, /before_agent_start/);
   assert.match(source, /pi-persona-active/);
+  assert.match(statusBlock, /restoreActivePersona\(ctx\)/);
+  assert.match(beforeAgentStartBlock, /restoreActivePersona\(ctx\)/);
   assert.match(beforeAgentStartBlock, /updateActivePersonaStatus\(ctx\)/);
   assert.doesNotMatch(source, /createPersonaLaunchProgress/);
+});
+
+test("extension does not register persona orchestration inside pi-subagents child sessions", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const guardIndex = source.indexOf("PI_SUBAGENT_CHILD");
+  const firstRegistrationIndex = Math.min(
+    source.indexOf("pi.registerTool"),
+    source.indexOf("pi.registerCommand"),
+    source.indexOf('pi.on("session_start"'),
+    source.indexOf('pi.on("before_agent_start"'),
+  );
+
+  assert.ok(guardIndex >= 0);
+  assert.ok(guardIndex < firstRegistrationIndex);
+  assert.match(source, /if\s*\([^)]*PI_SUBAGENT_CHILD[^)]*\)\s*return/);
 });
 
 test("active persona prompt treats raw subagent discovery as outside persona consults", async () => {
@@ -270,6 +307,12 @@ test("docs document active persona footer and global subagent list behavior", as
   assert.match(blueprint, /npm:pi-powerline-footer/);
   assert.match(blueprint, /`subagent list` lists global Pi subagents/);
   assert.match(blueprint, /`persona_consult` only accepts project Pi Persona agents/);
+  assert.match(blueprint, /bootstrap command/);
+  assert.match(blueprint, /falling through as ordinary prompt text/);
+  assert.match(blueprint, /PI_SUBAGENT_CHILD/);
+  assert.match(blueprint, /leaf task/);
+  assert.doesNotMatch(blueprint, /child supervisor/);
+  assert.doesNotMatch(blueprint, /blocked children/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
@@ -468,7 +511,7 @@ test("doctor warns but keeps direct mode available when child runtime packages a
 
   assert.equal(result.status, "warning");
   assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-subagents missing; consults and round-tables are unavailable")));
-  assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-intercom missing; blocked child supervision is unavailable")));
+  assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-intercom missing; native child result delivery may be unavailable")));
 });
 
 test("doctor does not require per-persona subagent runtime provisioning", async () => {
@@ -1039,7 +1082,11 @@ test("resolveConsultLaunchRequest builds summarized fresh consultant scope by de
   assert.match(consult.subagentParams.task, /^\[Read from: docs\/shared\/company\.md, docs\/workstreams\/guideline\/rules\.md\]/);
   assert.match(consult.subagentParams.task, /consultant: guideline/);
   assert.match(consult.subagentParams.task, /summary: The requester is revising launch copy/);
+  assert.match(consult.subagentParams.task, /This consult is a leaf task/);
+  assert.match(consult.subagentParams.task, /Do not call `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or `intercom`/);
+  assert.match(consult.subagentParams.task, /If blocked, report the blocker in your returned answer/);
   assert.doesNotMatch(consult.subagentParams.task, /Brand prompt/);
+  assert.doesNotMatch(consult.subagentParams.task, /supervisor help/);
 });
 
 test("resolveConsultLaunchRequest allows consulting any known persona by roster", async () => {
@@ -1113,6 +1160,93 @@ test("formatConsultBridgeResult returns consultant answer with compact provenanc
   assert.match(text, /Guideline approved\./);
   assert.match(text, /Consulted:/);
   assert.match(text, /- guideline \(answered\): Guideline approved\./);
+});
+
+test("extractConsultAnswer prefers structured and final child output", async () => {
+  const structured = await extractConsultAnswer({
+    result: {
+      content: [{ type: "text", text: "Bridge wrapper" }],
+      details: {
+        results: [{
+          structuredOutput: "Structured answer",
+          finalOutput: "Final answer",
+        }],
+      },
+    },
+  });
+
+  assert.deepEqual(structured, {
+    text: "Structured answer",
+    source: "structured",
+  });
+
+  const final = await extractConsultAnswer({
+    result: {
+      content: [{ type: "text", text: "Bridge wrapper" }],
+      details: {
+        results: [{
+          finalOutput: "Final answer",
+        }],
+      },
+    },
+  });
+
+  assert.deepEqual(final, {
+    text: "Final answer",
+    source: "final",
+  });
+});
+
+test("extractConsultAnswer reads artifact output before bridge wrapper text", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-artifact-"));
+  const outputPath = path.join(root, "consult-output.md");
+  await writeText(outputPath, "Artifact answer\n");
+
+  const answer = await extractConsultAnswer({
+    result: {
+      content: [{ type: "text", text: "Delivered single subagent result via intercom." }],
+      details: {
+        results: [{
+          artifactPaths: { outputPath },
+        }],
+      },
+    },
+  });
+
+  assert.deepEqual(answer, {
+    text: "Artifact answer",
+    source: "artifact",
+    artifactPath: outputPath,
+  });
+});
+
+test("extractConsultAnswer falls back to bridge text or clear metadata error", async () => {
+  const bridge = await extractConsultAnswer({
+    result: {
+      content: [{ type: "text", text: "Bridge fallback answer" }],
+    },
+  });
+
+  assert.deepEqual(bridge, {
+    text: "Bridge fallback answer",
+    source: "bridge",
+  });
+
+  const missing = await extractConsultAnswer({
+    result: {
+      details: {
+        runId: "run-123",
+        results: [{
+          artifactPaths: { outputPath: "/tmp/missing-output.md" },
+        }],
+      },
+    },
+  });
+
+  assert.equal(missing.source, "missing");
+  assert.match(missing.text, /Consult completed but no answer text was found/);
+  assert.match(missing.text, /run-123/);
+  assert.match(missing.text, /\/tmp\/missing-output\.md/);
 });
 
 test("buildConsultEnvelope requires requester-written summary", () => {
@@ -1194,9 +1328,17 @@ Pricing prompt.
   assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/company.md"]);
   assert.deepEqual(roundtable.subagentParams.chain[2].skill, ["shared-skill"]);
   assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Round 1 - Independent Position/);
-  assert.match(roundtable.subagentParams.chain[0].parallel[0].task, /Stay inside this round-table unless you are blocked/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /Round 2 - Reveal And Revise/);
   assert.match(roundtable.subagentParams.chain[1].parallel[0].task, /\{previous\}/);
+  for (const task of [
+    roundtable.subagentParams.chain[0].parallel[0].task,
+    roundtable.subagentParams.chain[1].parallel[0].task,
+  ]) {
+    assert.match(task, /This round-table step is a leaf task/);
+    assert.match(task, /Do not call `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or `intercom`/);
+    assert.match(task, /If blocked, report the blocker in your returned answer/);
+    assert.doesNotMatch(task, /supervisor help/);
+  }
   assert.match(roundtable.subagentParams.chain[2].task, /Moderator Synthesis/);
   assert.match(roundtable.subagentParams.chain[2].task, /\{previous\}/);
 });

@@ -116,7 +116,7 @@ function collectDependencyIssues(dependencies, issues) {
   if (!dependencies.piIntercom?.ok) {
     issues.push({
       severity: "warning",
-      message: "pi-intercom missing; blocked child supervision is unavailable",
+      message: "pi-intercom missing; native child result delivery may be unavailable",
     });
   }
 }

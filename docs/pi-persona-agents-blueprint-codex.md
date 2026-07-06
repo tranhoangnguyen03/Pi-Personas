@@ -47,8 +47,7 @@ Required dependencies own:
   foreground/background execution, fresh/fork context launch, parallelism,
   status, resume, interrupt, child safety, and project-level agent discovery.
 - `pi-intercom` owns targeted session-to-session communication and the
-  subagent-to-supervisor bridge for blocked decisions, structured clarification,
-  and meaningful plan-changing updates.
+  native result/progress channels that `pi-subagents` may use.
 
 Pi Persona Agents owns:
 
@@ -152,16 +151,15 @@ The blueprint should be implemented through a small adapter over Pi,
 `pi-subagents`, and `pi-intercom`. That adapter isolates package-specific calls
 while keeping a single user-facing system.
 
-Required packages for consults, round-tables, and child supervision:
+Required packages for consults, round-tables, and native child-result delivery:
 
 - `pi-subagents`
 - `pi-intercom`
 
-The extension should refuse to run consults, round-tables, or child-supervisor
-handoffs until the relevant package is installed and visible to Pi. Direct
-persona activation should still work when these packages are missing, with
-doctor reporting consult/round-table readiness separately from direct-mode
-readiness.
+The extension should refuse to run consults and round-tables until the relevant
+package is installed and visible to Pi. Direct persona activation should still
+work when these packages are missing, with doctor reporting consult/round-table
+readiness separately from direct-mode readiness.
 
 Required Pi capabilities:
 
@@ -172,8 +170,8 @@ Required Pi capabilities:
 - Send a user message or follow-up from a command handler.
 - Load `pi-subagents` project-level agent files.
 - Launch `pi-subagents` child runs in fresh or fork context.
-- Let `pi-intercom` provide `contact_supervisor` to subagent children when
-  bridge metadata is present.
+- Let `pi-subagents` and `pi-intercom` deliver child-run progress and results
+  through their native runtime paths.
 - Expose user-facing commands such as slash commands, command palette actions,
   or plugin actions.
 
@@ -193,8 +191,8 @@ Runtime contract:
   child runs and names them in active persona instructions for direct mode. It
   does not define a separate skill-breadcrumb runtime.
 - `pi-subagents` executes the resolved consult and round-table child runs.
-- `pi-intercom` is used only for supervisor contact while a child is running,
-  not as the ordinary result transport.
+- Pi Persona does not use `pi-intercom` as its semantic consult protocol. Child
+  progress and result UI remain owned by the native `pi-subagents` runtime.
 - Pi Persona does not hard-enforce doc, skill, or tool boundaries. Pi,
   `pi-subagents`, and the host filesystem own access. Pi Persona provides
   semantic routing and setup guidance that nudge the agent toward the intended
@@ -392,14 +390,16 @@ runtime packages, project initialization, agents, docs, and skills.
 
 ### 7.0 Installing Runtime Dependencies
 
-Pi Persona Agents requires:
+Pi Persona consult and round-table workflows require:
 
 - `pi-subagents`
 - `pi-intercom`
 
 The setup path should install or verify both packages through Pi's normal
-package ecosystem. `/persona doctor` should fail early if either package is
-missing, disabled, or not visible to the active Pi session.
+package ecosystem. `/persona doctor` should report actionable readiness
+warnings if either package is missing, disabled, or not visible to the active
+Pi session; direct persona mode still works without these child-runtime
+packages.
 
 After dependencies are present, pi-persona should enforce project-level agent
 behavior by writing or maintaining project agent files under `.pi/agents/`.
@@ -804,6 +804,9 @@ direct persona commands as `pi-subagents` child runs:
 - Direct `/<persona> <query>` answers in the active Pi chat session.
 - Direct persona mode persists across follow-up turns until `/persona clear` or
   another persona command.
+- `/generalist` is registered as a bootstrap command. Before `.pi/agents`
+  contains a `generalist` agent, it returns setup guidance to run
+  `/persona init` instead of falling through as ordinary prompt text.
 - Direct persona mode uses Pi's prompt hook for persona instructions and doc
   read guidance. It does not depend on `pi-subagents` runtime `reads` or native
   skill selection.
@@ -819,6 +822,12 @@ direct persona commands as `pi-subagents` child runs:
   persona state, and provenance.
 - `/persona-roundtable` remains an explicit multi-persona workflow that may use
   `pi-subagents` directly.
+- When `PI_SUBAGENT_CHILD=1`, Pi Persona stays inert and does not register
+  persona commands, `persona_consult`, or active-persona prompt injection. A
+  child run is already executing as the selected leaf persona.
+- Consult and round-table child prompts are leaf tasks. They must not call
+  `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or
+  `intercom`; if blocked, they report the blocker in the returned answer.
 
 ---
 
@@ -899,25 +908,25 @@ Consulted:
 
 Topology:
 
-- Default operating depth is one hop; nested consults are discouraged and
-  surfaced in provenance if they occur.
+- Default operating depth is one hop; nested consults are discouraged in direct
+  persona prompts and forbidden in consult child prompts.
 - Width open for parallel fan-out.
 - Barrier fan-in: wait for all consults to settle.
 - Independent failure: partial results are returned with explicit failures.
 - No awareness-package inheritance from caller: consulted agents receive their
   own resolved docs, skills, and model by default.
-- `pi-intercom/contact_supervisor` is available for blocked decisions,
-  structured clarification, or meaningful plan-changing updates. Routine
-  consult completion returns through `pi-subagents`.
+- If a consulted child is blocked, it reports the blocker in its returned answer
+  instead of calling supervisor/intercom tools.
 - Direct persona mode does not require every persona to have a child-safe
   `subagent` tool. The top-level active persona owns normal consult decisions
   through `persona_consult`.
 
 One-hop consults are the default operating pattern because they are easier to
-debug and summarize. Pi Persona should discourage nested consults in prompts and
-make them visible in provenance if they occur; it should not add a permission
-system just to block them. Nested consult support is not a direct-launch
-requirement and should not drive scaffold or doctor requirements by default.
+debug and summarize. Pi Persona should discourage nested consults in active
+persona prompts and make consult children explicit leaf workers; it should not
+add a permission system just to block them. Nested consult support is not a
+direct-launch requirement and should not drive scaffold or doctor requirements
+by default.
 
 ---
 
@@ -969,8 +978,8 @@ The primary generalist synthesizes:
 - Any specialist failures and their impact.
 
 The round-table is the multi-agent interaction. Specialists inside a
-round-table are instructed to stay inside the round-table unless they are
-blocked and need supervisor help.
+round-table receive leaf task instructions: do not call nested consult,
+subagent, supervisor, or intercom tools; report blockers in the returned answer.
 
 ---
 
@@ -1044,8 +1053,8 @@ reliably:
 
 - `pi-subagents` is installed, enabled, and discovering project agents when
   consult or round-table workflows are expected.
-- `pi-intercom` is installed, enabled, and available for child supervisor
-  contact.
+- `pi-intercom` is installed, enabled, and available for native child result
+  delivery when consult or round-table workflows are expected.
 - Agent markdown parses.
 - Required frontmatter exists.
 - Agent files are compatible with `pi-subagents` project-level discovery.
@@ -1103,7 +1112,7 @@ a valid file. The user can iterate.
 1. **Runtime capability audit.** Confirm Pi command, transcript-entry,
    `sendUserMessage`, and `before_agent_start` hooks are available for active
    persona mode. Confirm `pi-subagents` and `pi-intercom` are available for
-   consults, round-tables, and blocked child sessions.
+   consults, round-tables, and native child result delivery.
 2. **Project agent surface.** Confirm `.pi/agents/**/*.md` discovery through
    `pi-subagents`, including how to exclude `_baseline.md` and how copied
    runtime roles should be named.
@@ -1150,7 +1159,7 @@ Step 16 makes the user's initial operating layer real.
 | Decision | Resolution |
 |---|---|
 | Product boundary | Pi extension, not separate agent platform |
-| Runtime dependencies | Pi active-session hooks are required for direct persona mode; `pi-subagents` and `pi-intercom` support consults, round-tables, and blocked children |
+| Runtime dependencies | Pi active-session hooks are required for direct persona mode; `pi-subagents` and `pi-intercom` support consults, round-tables, and native child result delivery |
 | Runtime design | Reuse required packages; do not build a parallel subagent system |
 | Default write policy | Inherit Pi and filesystem permissions |
 | User customization | 80% generic base, 20% user-defined agents/docs/skills |
@@ -1159,7 +1168,7 @@ Step 16 makes the user's initial operating layer real.
 | Skill setup | Native `pi-subagents` skills; no custom Pi Persona skill-breadcrumb layer |
 | Doc setup | Workspace files referenced by path |
 | Docs transport | Active persona mode injects doc-read guidance; consult and round-table child runs compile `docs` to `pi-subagents` `reads` |
-| Direct persona behavior | `/<agent-name> [query]` activates that persona in the current Pi session; no direct child subagent run |
+| Direct persona behavior | `/<agent-name> [query]` activates that persona in the current Pi session; no direct child subagent run; bootstrap `/generalist` guides users to `/persona init` before setup |
 | Persona lifecycle | Another persona command switches personas; `/persona clear` exits; `/persona status` reports current state |
 | Persona discovery | `/persona-list` is read-only; activate with `/<agent-name>` |
 | Consult context | Summarized/fresh context by default; requester-context fork is deliberate |
@@ -1174,7 +1183,7 @@ Step 16 makes the user's initial operating layer real.
 | Round-table membership | Ad hoc, up to five specialists |
 | Round-table execution | `/persona-roundtable` remains an explicit multi-persona workflow and may use `pi-subagents` directly |
 | Discourse protocol | Independent, reveal/revise, synthesize |
-| Supervisor bridge | `pi-intercom/contact_supervisor` only for blocked or plan-changing updates |
+| Child escalation | Consult and round-table children are leaf workers; blockers return in the child answer instead of supervisor/intercom calls |
 | Routing | Simple first; optimize only after user-reported misses |
 | Validation | Cheap structural checks through `/persona doctor` |
 | Restriction policy | Inform and nudge through semantic context; do not create a permission system |
@@ -1332,13 +1341,15 @@ is reported, and work continues.
 
 **Test 5.5 - Nested consult guidance.**
 Have a consulted agent attempt a nested consult. Pass: pi-persona discourages
-the nested consult in instructions and shows it in provenance if it happens.
+the nested consult in active-persona instructions, forbids
+`persona_consult`/raw `subagent`/`subagent list`/`contact_supervisor`/`intercom`
+inside consult child instructions, and returns blockers in the child answer.
 Scaffold and doctor do not require every direct persona to have child-safe
 `subagent` fanout. There is no separate Pi Persona consult permission system.
 
-**Test 5.6 - Supervisor bridge.**
-Have a consulted agent encounter a blocking decision. Pass: it uses
-`pi-intercom/contact_supervisor`; routine completion still returns through
+**Test 5.6 - Blocked consultant.**
+Have a consulted agent encounter a blocking decision. Pass: it reports the
+blocker in its returned answer; routine completion still returns through
 `pi-subagents`.
 
 ### Phase 6 - Round-table

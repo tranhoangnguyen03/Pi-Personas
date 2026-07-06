@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
@@ -73,6 +74,33 @@ export function formatConsultBridgeResult(consultRequest, answerText, isError = 
   ].join("\n");
 }
 
+export async function extractConsultAnswer(response) {
+  const structured = firstChildText(response, "structuredOutput");
+  if (structured) return { text: structured, source: "structured" };
+
+  const final = firstChildText(response, "finalOutput") || firstChildText(response, "output");
+  if (final) return { text: final, source: "final" };
+
+  for (const artifactPath of artifactOutputPaths(response)) {
+    try {
+      const text = normalizeAnswerText(await readFile(artifactPath, "utf8"));
+      if (text !== "(no output)") {
+        return { text, source: "artifact", artifactPath };
+      }
+    } catch {
+      // Ignore missing/stale artifacts; the bridge text fallback below still gives context.
+    }
+  }
+
+  const bridge = bridgeResponseText(response);
+  if (bridge) return { text: bridge, source: "bridge" };
+
+  return {
+    text: missingAnswerText(response),
+    source: "missing",
+  };
+}
+
 function buildConsultTask(scope, envelope) {
   const { consult } = envelope;
   const sections = [];
@@ -90,7 +118,10 @@ function buildConsultTask(scope, envelope) {
     `constraints: ${consult.constraints || "none"}`,
     `expectedOutput: ${consult.expectedOutput || "focused answer for the requester"}`,
     "",
-    "Answer the requester directly from your own resolved docs and skills. Seek supervisor help only if you are blocked.",
+    "Answer the requester directly from your own resolved docs and skills.",
+    "This consult is a leaf task.",
+    "Do not call `persona_consult`, raw `subagent`, `subagent list`, `contact_supervisor`, or `intercom`.",
+    "If blocked, report the blocker in your returned answer.",
   ].join("\n"));
 
   const baseline = scope.promptSections.find((section) => section.label === "Baseline")?.body;
@@ -119,6 +150,69 @@ function optionalText(value) {
 
 function normalizeAnswerText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "(no output)";
+}
+
+function firstChildText(response, key) {
+  for (const result of childResults(response)) {
+    const value = result?.[key];
+    const text = stringifyAnswerValue(value);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function stringifyAnswerValue(value) {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (value === undefined || value === null) return undefined;
+  return JSON.stringify(value, null, 2);
+}
+
+function childResults(response) {
+  const results = response?.result?.details?.results;
+  return Array.isArray(results) ? results : [];
+}
+
+function artifactOutputPaths(response) {
+  const paths = [];
+  for (const result of childResults(response)) {
+    const outputPath = result?.artifactPaths?.outputPath ?? result?.savedOutputPath;
+    if (typeof outputPath === "string" && outputPath) paths.push(outputPath);
+  }
+  const artifactPath = response?.result?.details?.artifactPath;
+  if (typeof artifactPath === "string" && artifactPath) paths.push(artifactPath);
+  const children = response?.result?.details?.children;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      if (typeof child?.artifactPath === "string" && child.artifactPath) paths.push(child.artifactPath);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function bridgeResponseText(response) {
+  if (response?.errorText) return response.errorText;
+  const content = response?.result?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => part?.text)
+      .filter((text) => typeof text === "string" && text.length > 0)
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+function missingAnswerText(response) {
+  const metadata = [
+    response?.requestId ? `request: ${response.requestId}` : undefined,
+    response?.result?.details?.runId ? `run: ${response.result.details.runId}` : undefined,
+    ...artifactOutputPaths(response).map((artifactPath) => `artifact: ${artifactPath}`),
+  ].filter(Boolean);
+  return [
+    "Consult completed but no answer text was found.",
+    metadata.length ? metadata.join("\n") : "No run or artifact metadata was available.",
+  ].join("\n");
 }
 
 function summarizeAnswer(text) {
