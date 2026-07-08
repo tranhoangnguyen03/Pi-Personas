@@ -97,8 +97,16 @@ Run an explicit multi-persona workflow:
 /persona-roundtable should we launch this now?
 ```
 
-For richer project setup, start from the manifest guide in
-[`init-data/README.md`](init-data/README.md).
+For richer project setup, use assisted manifest drafting:
+
+```text
+/persona init draft --out init-data/my-operating-layer.yaml
+```
+
+Pi Persona creates a draft and starts a setup interview in the active Pi
+session. Answer the questions in chat; the assistant edits the YAML for you and
+previews the plan before apply. See [`init-data/README.md`](init-data/README.md)
+for the manifest details.
 
 ## Troubleshooting
 

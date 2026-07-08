@@ -14,6 +14,7 @@ import {
   formatConsultBridgeResult,
   formatDocsIndexReport,
   formatDoctorReport,
+  formatPersonaInitDraftAuthoringPrompt,
   formatPersonaInitManifestReport,
   formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
@@ -250,6 +251,10 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           if (parsed.mode === "draft") {
             const result = await createPersonaInitDraft(ctx.cwd, parsed.out);
             sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
+            pi.sendUserMessage(
+              formatPersonaInitDraftAuthoringPrompt(result),
+              ctx.isIdle() ? undefined : { deliverAs: "followUp" },
+            );
             return;
           }
           if (parsed.mode === "plan") {

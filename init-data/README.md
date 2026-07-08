@@ -1,17 +1,28 @@
 # Pi Persona Init Data
 
 This directory holds YAML manifests for bootstrapping a Pi Persona project.
-These files are user-editable setup inputs, not generated runtime state.
+These files are durable setup inputs, not generated runtime state.
 
-Start from `_template.yaml` when creating a new operating layer:
+New users should start with the assisted draft command:
 
-```sh
-cp init-data/_template.yaml init-data/my-operating-layer.yaml
+```text
+/persona init draft --out init-data/my-operating-layer.yaml
 ```
 
-Then edit the copied file and apply it with Pi Persona commands.
+The command creates a starter manifest and starts an agentic setup interview in
+the Pi session. Answer the questions in chat; the assistant should edit the YAML
+for you, then preview the result before applying it.
+
+Advanced users can still copy `_template.yaml` by hand when they already know
+the exact operating layer they want.
 
 ## Command Flow
+
+Create a working draft and start the assisted setup interview:
+
+```text
+/persona init draft --out init-data/my-operating-layer.yaml
+```
 
 Preview what the manifest would create:
 
@@ -42,6 +53,9 @@ It should be safe to rerun after editing the manifest, but it will not overwrite
 existing agent or docs files.
 
 ## What To Edit
+
+If you are using assisted setup, these fields are what the assistant edits for
+you. You do not need to know the YAML structure before starting.
 
 `project.name` is a human-readable setup name. Use a short, stable name.
 
@@ -82,12 +96,14 @@ workstream briefs, and `_index.md` files.
 When helping edit these manifests:
 
 - Preserve the YAML structure and `version: 1`.
+- Treat the user as new to Pi Persona; do not ask them to manually edit YAML.
+- Ask one question at a time and edit the manifest for the user.
 - Ask only for missing facts that materially change the persona layer.
 - Keep the template copy editable by humans.
 - Do not invent secrets, private business facts, or unsupported skills.
 - Prefer small, named specialists with clear routing descriptions.
 - Keep generated docs concise enough that the user can review them.
-- After editing, tell the user to run the plan command before applying.
+- Run or tell the user to run the plan command before applying.
 
 Use `_template.yaml` as the minimal reference. Use
 `business-operating-layer.yaml` as a fuller example of a multi-persona setup.

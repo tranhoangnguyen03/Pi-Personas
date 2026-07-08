@@ -30,9 +30,14 @@ Do not add an interactive `/persona setup` wizard for this phase. A wizard would
 need progress state, resume behavior, correction flows, and another validation
 surface. The manifest flow already provides all durable state in ordinary files.
 
+`/persona init draft --out <file>` is the handoff into agent-assisted setup. It
+should not leave a clueless user with "review or edit the YAML" as the next
+step. The command creates the manifest draft and then starts an assisted
+interview in the active Pi session.
+
 The authoring layer should ask only for information that materially changes the
-persona layer, write a YAML manifest or direct project files, and then run the
-existing validation commands.
+persona layer, edit the YAML manifest or direct project files for the user, and
+then run the existing validation commands.
 
 ## User Flow
 
@@ -45,20 +50,24 @@ existing validation commands.
    /persona init draft --out init-data/my-operating-layer.yaml
    ```
 
-3. The assistant helps edit `init-data/my-operating-layer.yaml`.
-4. User previews the result:
+3. The command starts an agentic setup interview in the Pi session.
+4. The assistant treats the user as new and asks one question at a time.
+5. The assistant edits `init-data/my-operating-layer.yaml` for the user as
+   answers arrive.
+6. The assistant previews the result:
 
    ```text
    /persona init --plan --from init-data/my-operating-layer.yaml
    ```
 
-5. User applies the manifest:
+7. The assistant summarizes the plan and asks before applying.
+8. User approves, then the assistant applies the manifest:
 
    ```text
    /persona init --from init-data/my-operating-layer.yaml
    ```
 
-6. User completes readiness:
+9. The assistant completes readiness:
 
    ```text
    /persona init status --from init-data/my-operating-layer.yaml
@@ -67,7 +76,7 @@ existing validation commands.
    /persona-list
    ```
 
-7. User activates a persona:
+10. User activates a persona:
 
    ```text
    /generalist
@@ -91,10 +100,29 @@ Permanent documentation that defines the assistant behavior for onboarding:
 - Explain when to use manifest-backed setup versus direct file edits.
 - Give the short interview questions.
 - Define what the assistant may infer and what it must not invent.
+- Require the assistant to edit the manifest for the user.
+- Forbid ending draft setup by telling the user to manually review or edit YAML.
 - Require `/persona init --plan` before applying a new manifest.
 - Require `/persona doctor` after applying or editing project files.
 
 This can start as a docs file. It does not need a new runtime module.
+
+### Draft Authoring Handoff
+
+Existing command path: `/persona init draft --out <file>`.
+
+Responsibilities:
+
+- Create the starter manifest.
+- Show a visible report that an assisted setup interview is starting.
+- Send a follow-up user message into the Pi session that asks the agent to help
+  shape the manifest.
+- Instruct the agent to treat the user as new, ask one question at a time, edit
+  the YAML directly, run `/persona init --plan`, summarize the plan, and ask
+  before applying.
+
+This is the agentic support layer. It is deliberately small: the active Pi
+session owns the interview; the manifest remains the durable working artifact.
 
 ### Manifest Primitives
 
@@ -197,6 +225,10 @@ Temporary artifacts guide setup but should not be treated as source of truth.
 optional provenance. The default should be to keep it because it records the
 intended operating layer and supports reruns that preserve existing files.
 
+During draft authoring, the manifest is not homework for the user. It is the
+assistant's working file. The user answers product and workflow questions; the
+assistant updates the YAML.
+
 ## Authoring Rules
 
 Ask only for the essentials:
@@ -206,6 +238,10 @@ Ask only for the essentials:
 - Specialist names and responsibilities.
 - Existing or desired docs/workstream paths.
 - Native `pi-subagents` skill names, when the user already knows them.
+
+The first assistant turn after `/persona init draft --out <file>` should not ask
+the user to inspect YAML. It should start with the workspace purpose and desired
+help, then proceed one question at a time.
 
 Do not invent:
 
@@ -240,6 +276,10 @@ Prefer conservative defaults:
 Add or maintain focused tests for:
 
 - The onboarding guide references current command syntax.
+- `/persona init draft --out <file>` sends an agentic authoring prompt after
+  creating the starter manifest.
+- The draft report says an assisted setup interview is starting and does not say
+  "review or edit the YAML" as the user's next responsibility.
 - Manifest draft, plan, apply, and status remain the canonical multi-agent setup
   path.
 - `/persona new` remains the canonical single-agent setup path.
@@ -264,11 +304,11 @@ direct launch, consult, round-table, and add-agent composition.
 
 The first implementation slice should be small:
 
-1. Add onboarding authoring documentation.
-2. Link it from the blueprint and init-data README.
-3. Update stale setup-ergonomics references that still mention legacy
+1. Change `/persona init draft --out <file>` to start an agentic authoring
+   prompt after creating the manifest.
+2. Add onboarding authoring documentation.
+3. Link it from the blueprint and init-data README.
+4. Update stale setup-ergonomics references that still mention legacy
    `--tools`, `--consults`, or `--tags` as current onboarding metadata.
-4. Add tests that pin the current onboarding command contract.
-5. Run `npm test`.
-
-Only add code if documentation cannot make the existing flow discoverable enough.
+5. Add tests that pin the current onboarding command contract.
+6. Run `npm test`.
