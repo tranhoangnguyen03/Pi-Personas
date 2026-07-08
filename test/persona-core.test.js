@@ -20,6 +20,7 @@ import {
   formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
   formatDoctorReport,
+  formatPersonaInitDraftAuthoringPrompt,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
@@ -193,7 +194,22 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /createPersonaProjectScaffold/);
   assert.match(source, /planPersonaInitFromManifest/);
   assert.match(source, /createPersonaInitDraft/);
+  assert.match(source, /formatPersonaInitDraftAuthoringPrompt/);
   assert.match(source, /createDocsIndex/);
+});
+
+test("extension starts agentic authoring after persona init draft", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  const draftBlock = source.slice(
+    source.indexOf('if (parsed.mode === "draft")'),
+    source.indexOf('if (parsed.mode === "plan")'),
+  );
+
+  assert.match(draftBlock, /createPersonaInitDraft/);
+  assert.match(draftBlock, /sendPersonaOutput/);
+  assert.match(draftBlock, /pi\.sendUserMessage\(/);
+  assert.match(draftBlock, /formatPersonaInitDraftAuthoringPrompt\(result\)/);
+  assert.doesNotMatch(draftBlock, /Review or edit the YAML/);
 });
 
 test("extension registers the persona_consult tool", async () => {
@@ -1929,7 +1945,16 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   assert.equal(plan.projectName, "my-business");
   assert.ok(plan.actions.some((action) => action.path === ".pi/agents/generalist.md"));
   assert.match(formatPersonaInitManifestReport(result), /Pi Persona Init Draft/);
+  assert.match(formatPersonaInitManifestReport(result), /Starting assisted setup interview/);
+  assert.doesNotMatch(formatPersonaInitManifestReport(result), /Review or edit the YAML/);
   assert.match(formatPersonaInitManifestReport(result), /\/persona init --plan --from init-data\/my-business\.yaml/);
+
+  const prompt = formatPersonaInitDraftAuthoringPrompt(result);
+  assert.match(prompt, /Help me shape the Pi Persona setup manifest at `init-data\/my-business\.yaml`/);
+  assert.match(prompt, /Treat me as a new user/);
+  assert.match(prompt, /Do not ask me to manually edit YAML/);
+  assert.match(prompt, /Ask one question at a time/);
+  assert.match(prompt, /\/persona init --plan --from init-data\/my-business\.yaml/);
 
   await assert.rejects(
     () => createPersonaInitDraft(root, "init-data/my-business.yaml"),

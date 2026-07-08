@@ -169,8 +169,10 @@ docs index. It preserves existing files.
 
 `/persona init draft --out <file>`, `/persona init --plan --from <file>`,
 `/persona init --from <file>`, and `/persona init status --from <file>` support
-manifest-backed setup. The manifest format is documented in
-[`../init-data/README.md`](../init-data/README.md).
+manifest-backed setup. The draft command creates a starter manifest and starts
+an assisted setup interview in the active Pi session; the assistant edits the
+YAML for the user and previews the plan before apply. The manifest format is
+documented in [`../init-data/README.md`](../init-data/README.md).
 
 `/<primary-generalist-name> [query]`, usually `/generalist [query]`, activates
 the primary generalist in the current chat. If the command includes a query, Pi

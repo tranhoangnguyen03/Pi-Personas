@@ -18,6 +18,7 @@ export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest }
 export {
   applyPersonaInitFromManifest,
   createPersonaInitDraft,
+  formatPersonaInitDraftAuthoringPrompt,
   formatPersonaInitManifestReport,
   parsePersonaInitArgs,
   planPersonaInitFromManifest,

@@ -137,9 +137,23 @@ function formatDraftReport(result) {
     `Created: ${result.source}`,
     `Project: ${result.projectName}`,
     "",
-    "Review or edit the YAML before applying it. Agentic authoring stays optional: ask Pi to revise this manifest if you want help shaping the personas.",
+    "Starting assisted setup interview. The manifest is a working draft; answer the setup questions in this chat before applying it.",
     "",
     `Next: run /persona init --plan --from ${result.source}`,
+  ].join("\n");
+}
+
+export function formatPersonaInitDraftAuthoringPrompt(result) {
+  return [
+    `Help me shape the Pi Persona setup manifest at \`${result.source}\`.`,
+    "",
+    "Treat me as a new user who does not yet know what to put where.",
+    "Do not ask me to manually edit YAML.",
+    "Ask one question at a time, starting with what this workspace is for and what kind of help I want from the personas.",
+    "As I answer, edit the manifest for me using conservative defaults: one primary generalist, small specialists with clear routing descriptions, shared facts in docs/shared/, and specialist facts in docs/workstreams/<name>/.",
+    "Do not invent secrets, private business facts, unsupported skills, runtime-only fields, or legacy tools/consults/tags metadata.",
+    "",
+    `When the manifest has enough information, run /persona init --plan --from ${result.source}, summarize the plan, and ask before applying it.`,
   ].join("\n");
 }
 
