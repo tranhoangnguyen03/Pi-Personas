@@ -338,8 +338,8 @@ test("active persona prompt treats raw subagent discovery as outside persona con
 test("docs document active persona footer and global subagent list behavior", async () => {
   const docs = [
     await readFile(path.join(process.cwd(), "README.md"), "utf8"),
-    await readFile(path.join(process.cwd(), "docs/blueprint.md"), "utf8"),
-    await readFile(path.join(process.cwd(), "docs/design.md"), "utf8"),
+    await readFile(path.join(process.cwd(), "docs/_about_pi_persona/blueprint.md"), "utf8"),
+    await readFile(path.join(process.cwd(), "docs/_about_pi_persona/design.md"), "utf8"),
   ].join("\n");
 
   assert.match(docs, /pi-persona-active/);
