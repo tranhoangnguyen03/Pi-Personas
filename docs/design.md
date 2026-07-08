@@ -1,0 +1,184 @@
+# Pi Persona Design
+
+This document describes the current implementation design. It should be enough
+for a maintainer to rebuild the repo behavior from first principles alongside
+the tests.
+
+## Module Responsibilities
+
+`extensions/pi-persona.ts` is glue. It registers commands and tools, manages
+active persona state through Pi hooks, updates extension status, calls pure
+persona modules, and formats command output for Pi.
+
+`src/persona/index.js` is the public module surface for the extension wrapper.
+
+`src/persona/agents.js`, `frontmatter.js`, and `schema.js` handle agent
+discovery, frontmatter parsing, and schema validation.
+
+`src/persona/resolver.js` builds resolved persona scopes from baseline,
+selected agent, declared docs, native skills, and known persona roster.
+
+`src/persona/launch.js` builds active-session persona prompts for direct
+persona commands.
+
+`src/persona/consult.js` owns semantic consult formatting, consultant launch
+requests, answer extraction, and provenance.
+
+`src/persona/subagent-bridge.js` is transport only. It emits a bridge request,
+waits for the matching response, forwards progress, and returns raw bridge data.
+
+`src/persona/roundtable.js` builds the explicit multi-persona workflow.
+
+`src/persona/doctor.js`, `runtime.js`, `doc-index.js`, `scaffold.js`, and
+`init-manifest.js` provide setup, validation, dependency checks, docs catalogue
+generation, and manifest-backed initialization.
+
+## Resolver Contract
+
+The resolver receives the workspace root and a persona name. It discovers
+`.pi/agents/**/*.md`, excludes control files such as `_baseline.md` from
+launchable personas, validates frontmatter, finds the selected agent, and
+combines:
+
+- baseline prompt, docs, and skills
+- selected persona prompt, docs, and skills
+- known persona roster
+- derived doc read guidance
+- derived child-runtime fields for consult and round-table runs
+
+The resolver should not execute tools, write files, or launch children. It
+returns structured data that command handlers and workflow builders can use.
+
+## Direct Persona Flow
+
+When a user runs `/generalist <query>` or `/<specialist-name> <query>`, Pi
+Persona resolves that persona and records it as the active persona for the
+current session.
+
+Before each agent turn, the extension injects the active persona prompt into
+the active Pi chat. The persona answers in the same chat. There is no child
+subagent run for direct persona answers.
+
+Active state is restored on session start from transcript data. `/persona
+status` reads the stored state. `/persona clear` removes it.
+
+The extension publishes the current persona to Pi status surfaces through the
+stable key `pi-persona-active`. When no persona is active, the key is cleared.
+With `npm:pi-powerline-footer`, users can display it through
+`powerline.customItems`, for example:
+
+```json
+{
+  "powerline": {
+    "customItems": [
+      {
+        "id": "persona",
+        "statusKey": "pi-persona-active",
+        "position": "secondary",
+        "color": "accent"
+      }
+    ]
+  }
+}
+```
+
+Pi Persona owns the status key, not the footer layout. It must update the key
+on session start, persona switch, persona clear, `/persona status`, and normal
+agent turns.
+
+## Consult Flow
+
+`persona_consult` is available to top-level active personas. The requester
+provides a consultant name, question, summary, constraints, expected output,
+and optional context mode.
+
+The consult module resolves the consultant from project Pi Persona agents only.
+It rejects unknown or duplicate names instead of falling back to global
+subagents.
+
+Default consult context is summarized and fresh. A forked requester context is
+allowed only when the requester deliberately chooses it. In all cases, the
+consultant receives its own resolved prompt, docs, skills, and model guidance.
+Requester docs and skills are not inherited unless they are also part of the
+consultant's baseline or persona file.
+
+The bridge response is interpreted with one fallback ladder:
+
+1. Use structured or final child output when present.
+2. Else read the output artifact path when present.
+3. Else use bridge text.
+4. Else return a clear error with run and artifact metadata.
+
+Provenance is compact and requester-facing. The requesting persona synthesizes
+the final answer.
+
+## Child-Run Boundary
+
+When `PI_SUBAGENT_CHILD=1`, Pi Persona is inert. It does not register persona
+commands, `persona_consult`, direct persona bootstrap commands, or active
+persona prompt injection. A child run is already executing as a selected leaf
+persona.
+
+Consult and round-table child prompts must treat the child as a leaf task. They
+must not call `persona_consult`, raw `subagent`, `subagent list`,
+`contact_supervisor`, or `intercom`. If blocked, the child reports the blocker
+in its returned answer.
+
+This prevents nested orchestration loops and avoids relying on bridge listeners
+that are intentionally absent inside `pi-subagents` children.
+
+## Round-table Flow
+
+`/persona-roundtable <query>` is an explicit multi-persona workflow. The
+generalist selects up to five relevant specialists from the project roster. The
+workflow then builds a bounded `pi-subagents` chain:
+
+- independent specialist positions
+- reveal and revise step
+- moderator synthesis
+
+Round-table uses child runs because the user explicitly asked for a
+multi-persona workflow. It is separate from ordinary direct persona answers.
+
+## Doctor And Runtime Checks
+
+`/persona doctor` validates:
+
+- required Pi runtime packages are present and configured
+- project agents are discoverable and compatible with `pi-subagents`
+- exactly one primary generalist exists
+- docs paths are inside the workspace and exist when required
+- nested docs directories have `_index.md` guidance
+- native skill names are used instead of path-style skill entries
+- legacy metadata is reported as migration guidance
+- runtime support roles carry useful provenance where possible
+
+Consult and round-table commands also run a runtime preflight before bridge
+execution so missing dependencies produce guidance instead of a timeout.
+
+## Global Subagent List
+
+`subagent list` lists global Pi subagents. It can include builtins, package
+agents, and project `.pi/agents` files. This is useful Pi runtime behavior, but
+it is not the Pi Persona consultant list.
+
+Pi Persona's consultant roster comes from project agents resolved in the active
+workspace. Users can inspect that roster with `/persona-list`.
+
+## Documentation And Test Strategy
+
+Tests should protect the public runtime boundaries:
+
+- package manifest exposes the extension
+- direct persona commands activate the active chat instead of child runs
+- `/generalist` has bootstrap command behavior before setup
+- active persona state is stored, restored, displayed, and clearable
+- footer status uses `pi-persona-active`
+- consults use `persona_consult`, not raw subagent discovery
+- runtime preflight reports missing `pi-subagents` or `pi-intercom`
+- child sessions are inert under `PI_SUBAGENT_CHILD`
+- consult child prompts describe leaf task behavior
+- docs explain global `subagent list` implications
+
+The docs test should read `README.md`, `docs/blueprint.md`, and
+`docs/design.md` as the canonical documentation set.

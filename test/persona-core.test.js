@@ -320,21 +320,25 @@ test("active persona prompt treats raw subagent discovery as outside persona con
 });
 
 test("docs document active persona footer and global subagent list behavior", async () => {
-  const blueprint = await readFile(path.join(process.cwd(), "docs/pi-persona-agents-blueprint-codex.md"), "utf8");
+  const docs = [
+    await readFile(path.join(process.cwd(), "README.md"), "utf8"),
+    await readFile(path.join(process.cwd(), "docs/blueprint.md"), "utf8"),
+    await readFile(path.join(process.cwd(), "docs/design.md"), "utf8"),
+  ].join("\n");
 
-  assert.match(blueprint, /pi-persona-active/);
-  assert.match(blueprint, /powerline\.customItems/);
-  assert.match(blueprint, /npm:pi-powerline-footer/);
-  assert.match(blueprint, /`subagent list` lists global Pi subagents/);
-  assert.match(blueprint, /`persona_consult` only accepts project Pi Persona agents/);
-  assert.match(blueprint, /bootstrap command/);
-  assert.match(blueprint, /falling through as ordinary prompt text/);
-  assert.match(blueprint, /pi install npm:pi-subagents/);
-  assert.match(blueprint, /runtime preflight/);
-  assert.match(blueprint, /PI_SUBAGENT_CHILD/);
-  assert.match(blueprint, /leaf task/);
-  assert.doesNotMatch(blueprint, /child supervisor/);
-  assert.doesNotMatch(blueprint, /blocked children/);
+  assert.match(docs, /pi-persona-active/);
+  assert.match(docs, /powerline\.customItems/);
+  assert.match(docs, /npm:pi-powerline-footer/);
+  assert.match(docs, /`subagent list` lists global Pi subagents/);
+  assert.match(docs, /`persona_consult` only accepts project Pi Persona agents/);
+  assert.match(docs, /bootstrap command/);
+  assert.match(docs, /falling through as ordinary prompt text/);
+  assert.match(docs, /pi install npm:pi-subagents/);
+  assert.match(docs, /runtime preflight/);
+  assert.match(docs, /PI_SUBAGENT_CHILD/);
+  assert.match(docs, /leaf task/);
+  assert.doesNotMatch(docs, /child supervisor/);
+  assert.doesNotMatch(docs, /blocked children/);
 });
 
 test("sendPersonaOutput writes visible command output when Pi sendMessage is available", () => {
