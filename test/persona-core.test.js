@@ -1312,6 +1312,27 @@ test("extractConsultAnswer reads artifact output before bridge wrapper text", as
   });
 });
 
+test("extractConsultAnswer treats intercom receipts as metadata when artifact output is unavailable", async () => {
+  const missingOutputPath = "/tmp/missing-consult-output.md";
+
+  const answer = await extractConsultAnswer({
+    result: {
+      content: [{ type: "text", text: "Delivered single subagent result via intercom.\nRun: run-456\nFull grouped output was sent over intercom." }],
+      details: {
+        runId: "run-456",
+        results: [{
+          artifactPaths: { outputPath: missingOutputPath },
+        }],
+      },
+    },
+  });
+
+  assert.equal(answer.source, "missing");
+  assert.match(answer.text, /Consult completed but no answer text was found/);
+  assert.match(answer.text, /run-456/);
+  assert.match(answer.text, /\/tmp\/missing-consult-output\.md/);
+});
+
 test("extractConsultAnswer falls back to bridge text or clear metadata error", async () => {
   const bridge = await extractConsultAnswer({
     result: {

@@ -93,7 +93,7 @@ export async function extractConsultAnswer(response) {
   }
 
   const bridge = bridgeResponseText(response);
-  if (bridge) return { text: bridge, source: "bridge" };
+  if (bridge && !isIntercomReceiptText(bridge)) return { text: bridge, source: "bridge" };
 
   return {
     text: missingAnswerText(response),
@@ -201,6 +201,12 @@ function bridgeResponseText(response) {
       .trim();
   }
   return "";
+}
+
+function isIntercomReceiptText(text) {
+  const lines = text.trim().split(/\r?\n/).map((line) => line.trim());
+  return /^Delivered (?:single subagent result|parallel subagent results|chain subagent results) via intercom\.$/.test(lines[0] ?? "")
+    && lines.includes("Full grouped output was sent over intercom.");
 }
 
 function missingAnswerText(response) {
