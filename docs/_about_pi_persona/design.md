@@ -180,5 +180,6 @@ Tests should protect the public runtime boundaries:
 - consult child prompts describe leaf task behavior
 - docs explain global `subagent list` implications
 
-The docs test should read `README.md`, `docs/blueprint.md`, and
-`docs/design.md` as the canonical documentation set.
+The docs test should read `README.md`,
+`docs/_about_pi_persona/blueprint.md`, and
+`docs/_about_pi_persona/design.md` as the canonical documentation set.

@@ -6,13 +6,13 @@ repo.
 
 ## Reading Order
 
-1. [`../README.md`](../README.md) - user-facing install, quickstart, and
+1. [`../../README.md`](../../README.md) - user-facing install, quickstart, and
    troubleshooting.
 2. [`blueprint.md`](blueprint.md) - product boundary, persona model, command
    surface, setup model, and settled decisions.
 3. [`design.md`](design.md) - implementation responsibilities, data flow,
    integration points, and verification strategy.
-4. [`../init-data/README.md`](../init-data/README.md) - manifest-backed project
+4. [`../../init-data/README.md`](../../init-data/README.md) - manifest-backed project
    initialization inputs.
 
 ## Repo Docs Versus Generated Project Docs

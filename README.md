@@ -133,7 +133,7 @@ but not loaded as a Pi package.
 
 ## Maintainer Docs
 
-- [`docs/README.md`](docs/README.md) gives the maintainer reading order.
-- [`docs/blueprint.md`](docs/blueprint.md) explains the product model and
+- [`docs/_about_pi_persona/README.md`](docs/_about_pi_persona/README.md) gives the maintainer reading order.
+- [`docs/_about_pi_persona/blueprint.md`](docs/_about_pi_persona/blueprint.md) explains the product model and
   settled principles.
-- [`docs/design.md`](docs/design.md) explains the implementation design.
+- [`docs/_about_pi_persona/design.md`](docs/_about_pi_persona/design.md) explains the implementation design.

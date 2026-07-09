@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { promisify } from "node:util";
 
 import {
   buildAgentLaunchRequest,
@@ -41,6 +43,8 @@ import {
   runDoctor,
   sendPersonaOutput,
 } from "../src/persona/index.js";
+
+const execFileAsync = promisify(execFile);
 
 async function writeText(filePath, text) {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -177,6 +181,46 @@ test("package manifest exposes Pi Persona as a Pi extension package", async () =
 
   assert.ok(manifest.keywords.includes("pi-package"));
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-persona.ts"]);
+});
+
+test("package tarball excludes local runtime state and tests", async () => {
+  const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+  });
+  const [packed] = JSON.parse(stdout);
+  const files = packed.files.map((entry) => entry.path);
+  const forbidden = files.filter((filePath) => (
+    filePath.startsWith(".pi/")
+    || filePath.startsWith(".pi-subagents/")
+    || filePath.startsWith(".sc/")
+    || filePath.startsWith("test/")
+  ));
+
+  assert.ok(files.includes("README.md"));
+  assert.ok(files.includes("extensions/pi-persona.ts"));
+  assert.ok(files.includes("src/persona/index.js"));
+  assert.deepEqual(forbidden, []);
+});
+
+test("runtime Pi packages are optional peers for plain npm installs", async () => {
+  const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+
+  assert.equal(manifest.peerDependencies["pi-intercom"], ">=0.6.0");
+  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.31.0");
+  assert.equal(manifest.peerDependenciesMeta["pi-intercom"].optional, true);
+  assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
+});
+
+test("README maintainer doc links point to checked-in files", async () => {
+  const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
+
+  assert.match(readme, /\(docs\/_about_pi_persona\/README\.md\)/);
+  assert.match(readme, /\(docs\/_about_pi_persona\/blueprint\.md\)/);
+  assert.match(readme, /\(docs\/_about_pi_persona\/design\.md\)/);
+  assert.doesNotMatch(readme, /\(docs\/README\.md\)/);
+  assert.doesNotMatch(readme, /\(docs\/blueprint\.md\)/);
+  assert.doesNotMatch(readme, /\(docs\/design\.md\)/);
 });
 
 test("extension uses the persona command namespace instead of generic agent", async () => {
