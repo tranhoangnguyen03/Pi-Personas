@@ -9,6 +9,7 @@ import {
   resolveWorkspacePath,
 } from "./agents.js";
 import { inspectDocPath } from "./doc-index.js";
+import { findPersonaTemplatePlaceholders } from "./init-manifest.js";
 import { validatePersonaSchema } from "./schema.js";
 
 const RUNTIME_PACKAGES = {
@@ -19,6 +20,8 @@ const RUNTIME_PACKAGES = {
     missing: "pi-subagents missing; consults and round-tables are unavailable",
   },
 };
+
+export const PI_SUBAGENTS_MANAGED_DELIVERY_VERSION = "0.35.0";
 
 export async function runDoctor(root, options = {}) {
   const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
@@ -37,6 +40,7 @@ export async function runDoctor(root, options = {}) {
   issues.push(...validatePersonaSchema(project));
   collectDuplicateNameIssues(project, issues);
   collectGeneralistIssues(project, issues);
+  collectAgentTemplatePlaceholderIssues(project, issues);
   await collectDocsIssues(project, issues);
   collectSkillsIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
@@ -63,7 +67,7 @@ export async function assertPersonaRuntimeReady(root, options = {}) {
     throw new Error("Pi Persona repaired duplicate pi-subagents configuration. Reload Pi, then retry.");
   }
   const dependencyStatus = options.dependencyStatus ?? await detectDependencies(root);
-  const problems = runtimeDependencyProblems(dependencyStatus);
+  const problems = runtimeDependencyProblems(dependencyStatus, options.minimumPiSubagentsVersion);
   if (problems.length === 0) return dependencyStatus;
 
   throw new Error([
@@ -273,18 +277,38 @@ function collectRuntimePackageIssue(dependency, spec, issues) {
       message: `${spec.name} installed but not configured in Pi settings; run \`pi install ${dependency.packageSource ?? spec.source}\``,
     });
   }
+  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_MANAGED_DELIVERY_VERSION)) {
+    issues.push({
+      severity: "warning",
+      message: `${spec.name} ${dependency.version ?? "unknown"} lacks managed round-table result delivery; upgrade to >=${PI_SUBAGENTS_MANAGED_DELIVERY_VERSION}`,
+    });
+  }
 }
 
-function runtimeDependencyProblems(dependencies) {
+function runtimeDependencyProblems(dependencies, minimumPiSubagentsVersion) {
   return [
-    runtimeDependencyProblem(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents),
+    runtimeDependencyProblem(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents, minimumPiSubagentsVersion),
   ].filter(Boolean);
 }
 
-function runtimeDependencyProblem(dependency, spec) {
+function runtimeDependencyProblem(dependency, spec, minimumVersion) {
   if (!dependency?.ok) return `${spec.name} is missing at ${dependency?.path ?? "unknown"}`;
   if (dependency.configured === false) return `${spec.name} is installed but not configured in Pi settings`;
+  if (minimumVersion && !versionAtLeast(dependency.version, minimumVersion)) {
+    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; managed round-tables require >=${minimumVersion}`;
+  }
   return "";
+}
+
+function versionAtLeast(actual, minimum) {
+  const actualMatch = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(actual ?? ""));
+  const minimumMatch = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(minimum ?? ""));
+  if (!actualMatch || !minimumMatch) return false;
+  for (let index = 1; index <= 3; index += 1) {
+    const difference = Number(actualMatch[index]) - Number(minimumMatch[index]);
+    if (difference !== 0) return difference > 0;
+  }
+  return minimumMatch[4] !== undefined || actualMatch[4] === undefined;
 }
 
 function collectParseIssues(project, issues) {
@@ -337,6 +361,7 @@ async function collectDocsIssues(project, issues) {
     }
   }
 
+  const checkedFiles = new Set();
   for (const entry of docsEntries) {
     const resolved = resolveWorkspacePath(project.root, entry.docPath);
     if (!resolved.ok) {
@@ -366,6 +391,32 @@ async function collectDocsIssues(project, issues) {
         message: `${entry.owner}: ${entry.docPath} has ${inspection.deferred.length} nested docs but no _index.md; run /persona index ${entry.docPath} or add an index manually for progressive discovery`,
       });
     }
+    for (const filePath of [...inspection.files, ...inspection.deferred]) {
+      if (checkedFiles.has(filePath)) continue;
+      checkedFiles.add(filePath);
+      const resolvedFile = resolveWorkspacePath(project.root, filePath);
+      if (!resolvedFile.ok) continue;
+      const content = await readFile(resolvedFile.path, "utf8");
+      if (findPersonaTemplatePlaceholders(content).length > 0) {
+        issues.push({
+          severity: "error",
+          file: filePath,
+          message: `${filePath}: unresolved template placeholder; finish onboarding with real operating context`,
+        });
+      }
+    }
+  }
+}
+
+function collectAgentTemplatePlaceholderIssues(project, issues) {
+  for (const file of project.files) {
+    const fields = [file.rawFrontmatter?.description, file.body];
+    if (!fields.some((value) => findPersonaTemplatePlaceholders(value).length > 0)) continue;
+    issues.push({
+      severity: "error",
+      file: file.relativePath,
+      message: `${file.relativePath}: unresolved template placeholder; finish onboarding with a real persona description and prompt`,
+    });
   }
 }
 

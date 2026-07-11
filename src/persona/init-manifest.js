@@ -11,6 +11,20 @@ import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.
 import { normalizeAgentName } from "./scaffold.js";
 
 const VALID_ROLES = new Set(["generalist", "specialist"]);
+const TEMPLATE_PLACEHOLDERS = [
+  "Add the user's business facts, priorities, constraints, audience, products, services, channels, and recurring decisions here.",
+  "Replace this with the specialist's operating notes.",
+  "Replace with the specialist's routing description.",
+  "Replace this with the specialist's role, operating style, and expected output shape.",
+  "add the behavior or spec under test here",
+  "list anything still undecided",
+].map(normalizePlaceholderText);
+
+export function findPersonaTemplatePlaceholders(value) {
+  const normalized = normalizePlaceholderText(value);
+  if (!normalized) return [];
+  return TEMPLATE_PLACEHOLDERS.filter((placeholder) => normalized.includes(placeholder));
+}
 
 export function parsePersonaInitArgs(args) {
   const tokens = tokenizeArgs(args);
@@ -328,7 +342,7 @@ function normalizeManifest(raw, sourcePath, root) {
 
   const docsFiles = normalizeDocsFiles(raw.docs?.files, sourcePath, root);
   const baselineDocs = normalizePathList(raw.baseline.docs, `${sourcePath}: baseline.docs`, root);
-  return {
+  const manifest = {
     source: sourcePath,
     projectName: String(raw.project.name).trim(),
     baseline: {
@@ -339,6 +353,23 @@ function normalizeManifest(raw, sourcePath, root) {
     docsFiles,
     agents,
   };
+  assertNoTemplatePlaceholders(manifest);
+  return manifest;
+}
+
+function assertNoTemplatePlaceholders(manifest) {
+  const unresolved = [];
+  if (findPersonaTemplatePlaceholders(manifest.baseline.prompt).length > 0) unresolved.push("baseline.prompt");
+  for (const agent of manifest.agents) {
+    if (findPersonaTemplatePlaceholders(agent.description).length > 0) unresolved.push(`agents.${agent.name}.description`);
+    if (findPersonaTemplatePlaceholders(agent.prompt).length > 0) unresolved.push(`agents.${agent.name}.prompt`);
+  }
+  for (const file of manifest.docsFiles) {
+    if (findPersonaTemplatePlaceholders(file.content).length > 0) unresolved.push(`docs.files.${file.path}`);
+  }
+  if (unresolved.length > 0) {
+    throw new Error(`${manifest.source}: unresolved template placeholders: ${unresolved.join(", ")}. Finish assisted onboarding before planning or applying this manifest.`);
+  }
 }
 
 function normalizeAgent(raw, label, root) {
@@ -542,4 +573,8 @@ function isRecord(value) {
 
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizePlaceholderText(value) {
+  return typeof value === "string" ? value.toLowerCase().replace(/\s+/g, " ").trim() : "";
 }

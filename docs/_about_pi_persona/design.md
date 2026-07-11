@@ -171,6 +171,13 @@ one `pi-subagents` bridge request containing:
 - reveal and revise step
 - moderator synthesis
 
+The internal bridge request sets `resultDelivery: "response-only"`. This keeps
+native execution, progress, cancellation, artifacts, and child coordination,
+but suppresses the foreground grouped intercom result that would otherwise
+inject raw child output and trigger another parent turn. This capability
+requires `pi-subagents` 0.35.0 or newer and is intentionally absent from the
+model-facing subagent schema.
+
 Every chain task is explicitly advisory and read-only, so analysis is not
 rejected for failing to edit files. The top-level task repeats the no-edit
 contract for runtimes that infer completion intent from the original query.
@@ -181,8 +188,14 @@ directories for a replacement.
 The model-callable tool reports progress through one in-place `[pi-persona]`
 box. It shows elapsed and idle time, current phase, completed specialists,
 active persona tools and targets, aggregate tool categories, sources, reported
-failures, turns, and tokens. A heartbeat refreshes quiet periods without adding
-progress messages to the transcript. Started round-tables disable both the
+failures, turns, and tokens. Partial parallel updates are accumulated by child
+index so completed seats and totals never regress. The panel translates tools
+into human activities, shows every persona's round status, explains the active
+phase, names the next step, and finishes with a compact execution receipt.
+Collapsed and expanded call views disclose query, context, roster, selection
+reasons, and process without exposing raw child output or runtime paths. A
+heartbeat refreshes quiet periods without adding progress messages to the
+transcript. Started round-tables disable both the
 bridge runtime deadline and inactivity cancellation; silence is displayed, not
 treated as permission to interrupt a diligent specialist.
 

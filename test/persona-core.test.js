@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -311,7 +311,7 @@ test("runtime Pi packages are optional peers for plain npm installs", async () =
   const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
 
   assert.equal(manifest.peerDependencies["pi-intercom"], undefined);
-  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.34.0");
+  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.35.0");
   assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.publishConfig.access, "public");
@@ -366,6 +366,12 @@ test("extension starts agentic authoring after persona init draft", async () => 
 test("extension exposes model-callable manifest planning and confirmation-gated apply", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-init-tool-"));
   const draft = await createPersonaInitDraft(root, "init-data/setup.yaml");
+  const authoredDraft = (await readFile(path.join(root, draft.source), "utf8"))
+    .replace("Add the user's business facts, priorities, constraints, audience,\n      products, services, channels, and recurring decisions here.", "This workspace verifies Pi Persona onboarding and operation.")
+    .replace("Replace this with the specialist's operating notes.", "Review onboarding and operational behavior against the test brief.")
+    .replace("Replace with the specialist's routing description.", "Reviews onboarding and operation against the test brief.")
+    .replace("You are the example specialist. Replace this with the specialist's role,\n      operating style, and expected output shape.", "You are the QA specialist. Return concrete pass and fail findings.");
+  await writeText(path.join(root, draft.source), authoredDraft);
   const harness = await createExtensionHarness(root);
   const tool = harness.tools.get("persona_init");
 
@@ -466,6 +472,65 @@ test("persona consult panel discloses query and context mode", async () => {
     .map((line) => line.trimEnd())
     .join("\n");
   assert.equal(partial, "4:12 elapsed · 10 tools");
+});
+
+test("round-table panel discloses query context panel reasons process and completion evidence", async () => {
+  const root = await createCommandWorkspace("researcher");
+  const harness = await createExtensionHarness(root);
+  const tool = harness.tools.get("persona_roundtable");
+  const theme = {
+    bold(value) { return value; },
+    fg(_color, value) { return value; },
+  };
+  const args = {
+    query: "Should this extension ship?",
+    selections: [
+      { name: "critic", reason: "Checks explicit release gates." },
+      { name: "researcher", reason: "Assesses evidence coverage." },
+    ],
+    context: "fresh",
+  };
+
+  const expanded = tool.renderCall(args, theme, { expanded: true })
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.match(expanded, /Round-table · 2 specialists/);
+  assert.match(expanded, /Query: Should this extension ship\?/);
+  assert.match(expanded, /Context: fresh · specialists receive only resolved persona context/);
+  assert.match(expanded, /critic — Checks explicit release gates\./);
+  assert.match(expanded, /researcher — Assesses evidence coverage\./);
+  assert.match(expanded, /1\. Independent positions/);
+  assert.match(expanded, /3\. Primary-generalist synthesis/);
+
+  const partial = tool.renderResult({
+    content: [{ type: "text", text: "[pi-persona] Round-table\n\nPhase: moderator synthesis" }],
+  }, { expanded: false, isPartial: true }, theme)
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.equal(partial, "Phase: moderator synthesis");
+
+  const completed = tool.renderResult({
+    content: [{ type: "text", text: "Moderator synthesis" }],
+    details: {
+      process: {
+        specialists: 2,
+        rounds: 2,
+        completedSteps: 5,
+        expectedSteps: 5,
+        elapsedMs: 65_000,
+        toolCount: 29,
+        turns: 12,
+        categories: { files: 7 },
+      },
+    },
+  }, { expanded: false, isPartial: false }, theme)
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.match(completed, /✓ Round-table complete/);
+  assert.match(completed, /2 specialists · 2 rounds · 5\/5 steps complete · 1:05 elapsed · 29 tools · 12 turns · 7 files/);
 });
 
 test("extension direct persona commands activate the current chat instead of the subagent bridge", async () => {
@@ -601,8 +666,21 @@ test("extension preflights runtime dependencies before bridge execution", async 
   assert.doesNotMatch(roundtableCommandBlock, /runSubagentBridgeRequest/);
 });
 
-test("roundtable command delegates selection to the primary generalist and the tool emits one bridge request", async () => {
+test("roundtable command delegates selection to the primary generalist and the tool emits one bridge request", async (t) => {
   const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-roundtable-runtime-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ name: "pi-subagents", version: "0.35.0" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(async () => {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    await rm(agentDir, { recursive: true, force: true });
+  });
   const requests = [];
   const progressUpdates = [];
   const harness = await createExtensionHarness(root, {
@@ -644,6 +722,8 @@ test("roundtable command delegates selection to the primary generalist and the t
             results: [
               { agent: "brand", exitCode: 0, finalOutput: "Brand position" },
               { agent: "guideline", exitCode: 0, finalOutput: "Guideline position" },
+              { agent: "brand", exitCode: 0, finalOutput: "Revised brand position" },
+              { agent: "guideline", exitCode: 0, finalOutput: "Revised guideline position" },
               { agent: "generalist", exitCode: 0, finalOutput: "Choose the model that wins on your representative OCR set." },
             ],
           },
@@ -689,12 +769,16 @@ test("roundtable command delegates selection to the primary generalist and the t
   );
 
   assert.equal(requests.length, 1);
+  assert.equal(requests[0].params.resultDelivery, "response-only");
   assert.deepEqual(requests[0].params.chain.map((step) => step.phase), ["Round 1", "Round 2", "Synthesis"]);
   assert.match(progressUpdates.at(-1).content[0].text, /Round 1/);
   assert.match(progressUpdates.at(-1).content[0].text, /5 tools/);
   assert.notEqual(result.isError, true);
   assert.match(result.content[0].text, /Choose the model that wins/);
   assert.doesNotMatch(result.content[0].text, /Delivered chain subagent results via intercom/);
+  assert.equal(result.details.process.specialists, 2);
+  assert.equal(result.details.process.completedSteps, 5);
+  assert.equal(result.details.process.expectedSteps, 5);
 
   const repeated = await tool.execute(
     "roundtable-repeat",
@@ -859,7 +943,7 @@ Bad control prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -908,7 +992,7 @@ Legacy prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -934,7 +1018,7 @@ Brand prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1114,6 +1198,50 @@ test("runtime dependency preflight returns install and configuration guidance", 
   );
 });
 
+test("doctor warns about unmanaged round-table delivery and round-table preflight rejects it", async () => {
+  const root = await createWorkspace();
+  const dependencyStatus = {
+    piSubagents: { ok: true, configured: true, version: "0.34.0", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
+  };
+
+  const doctor = await runDoctor(root, { dependencyStatus });
+  assert.equal(doctor.status, "warning");
+  assert.ok(doctor.issues.some((issue) => issue.message.includes("lacks managed round-table result delivery")));
+
+  await assert.rejects(
+    () => assertPersonaRuntimeReady(root, {
+      dependencyStatus,
+      minimumPiSubagentsVersion: "0.35.0",
+    }),
+    /pi-subagents 0\.34\.0 is incompatible; managed round-tables require >=0\.35\.0/,
+  );
+
+  await assert.doesNotReject(() => assertPersonaRuntimeReady(root, { dependencyStatus }));
+});
+
+test("doctor rejects unresolved onboarding placeholders in personas and declared docs", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, "docs/shared/company.md"), "# Spec\n\nadd the behavior or spec under test here\n");
+  await writeText(path.join(root, ".pi/agents/brand.md"), `---
+name: brand
+role: specialist
+description: Replace with the specialist's routing description.
+docs: docs/workstreams/brand/
+---
+Replace this with the specialist's operating notes.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, configured: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.ok(result.issues.some((issue) => issue.message.includes(".pi/agents/brand.md: unresolved template placeholder")));
+  assert.ok(result.issues.some((issue) => issue.message.includes("docs/shared/company.md: unresolved template placeholder")));
+});
+
 test("doctor does not require per-persona subagent runtime provisioning", async () => {
   const root = await createWorkspace();
 
@@ -1129,7 +1257,7 @@ Manual prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1154,7 +1282,7 @@ Manual prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1239,7 +1367,7 @@ test("doctor warns when nested directory docs have no index", async () => {
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1312,7 +1440,7 @@ test("formats doctor report with actionable sections", async () => {
   const root = await createWorkspace();
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1380,7 +1508,7 @@ String primary prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1412,7 +1540,7 @@ Brand prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1435,7 +1563,7 @@ Backup generalist prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1460,7 +1588,7 @@ Backup generalist prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1490,7 +1618,7 @@ Worker prompt.
   const project = await discoverPersonaProject(root);
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1514,7 +1642,7 @@ Escape prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -2153,43 +2281,54 @@ test("formatRoundtableRosterPreview shows selected specialists and command conte
 });
 
 test("roundtable progress reports phase, activity, tools, sources, and recoverable errors", () => {
-  const tracker = createRoundtableProgressTracker(["brand", "guideline"], { startedAt: 1_000 });
+  const tracker = createRoundtableProgressTracker(["brand", "guideline"], { startedAt: 1_000, moderator: "generalist" });
   tracker.update({
-    progress: [
-      {
-        index: 0,
-        agent: "brand",
-        status: "completed",
-        recentTools: [{ tool: "search_web", args: "query", endMs: 2_000 }],
-        toolCount: 1,
-        turnCount: 1,
-        tokens: 500,
-      },
-      {
-        index: 1,
-        agent: "guideline",
-        status: "running",
-        currentTool: "read_webpage",
-        currentToolArgs: "https://example.com/benchmark",
-        recentTools: [{ tool: "read_webpage", args: "https://example.com/benchmark", endMs: 2_500 }],
-        failedTool: "read_webpage",
-        lastActivityAt: 2_500,
-        toolCount: 2,
-        turnCount: 2,
-        tokens: 1000,
-      },
-    ],
+    progress: [{
+      index: 0,
+      agent: "brand",
+      status: "completed",
+      recentTools: [{ tool: "search_web", args: "query", endMs: 2_000 }],
+      toolCount: 1,
+      turnCount: 1,
+      tokens: 500,
+    }],
+  }, 2_000);
+  tracker.update({
+    progress: [{
+      index: 1,
+      agent: "guideline",
+      status: "running",
+      currentTool: "read_webpage",
+      currentToolArgs: "https://example.com/benchmark",
+      recentTools: [{ tool: "read_webpage", args: "https://example.com/benchmark", endMs: 2_500 }],
+      failedTool: "read_webpage",
+      lastActivityAt: 2_500,
+      toolCount: 2,
+      turnCount: 2,
+      tokens: 1000,
+    }],
   }, 3_000);
 
   const text = tracker.format(4_000);
   assert.match(text, /Round-table/);
-  assert.match(text, /Round 1 · 1\/2 specialists complete/);
+  assert.match(text, /Round 1 — independent positions · 1\/2 complete/);
+  assert.match(text, /Specialists work separately before seeing peer answers/);
   assert.match(text, /active 1s ago/);
   assert.match(text, /3 tools/);
   assert.match(text, /1 sources/);
   assert.match(text, /1 recoverable errors/);
-  assert.match(text, /guideline:read_webpage/);
-  assert.match(text, /example\.com\/benchmark/);
+  assert.match(text, /brand · ✓ complete/);
+  assert.match(text, /guideline · … searching evidence · 2 tools · 2 turns/);
+  assert.match(text, /Next: specialists see peer positions and revise/);
+  assert.doesNotMatch(text, /example\.com|https?:\/\//);
+
+  tracker.update({ progress: [{ index: 1, agent: "guideline", status: "completed", toolCount: 2, turnCount: 2, tokens: 1000 }] }, 4_500);
+  tracker.update({ progress: [{ index: 2, agent: "brand", status: "running", toolCount: 0, turnCount: 1, tokens: 250 }] }, 5_000);
+  const roundTwo = tracker.format(6_000);
+  assert.match(roundTwo, /Round 2 — reveal and revise · 0\/2 complete/);
+  assert.match(roundTwo, /brand · ✓ independent · … revising after peer reveal/);
+  assert.match(roundTwo, /guideline · ✓ independent · ○ waiting/);
+  assert.equal(tracker.snapshot(6_000).turns, 4);
 });
 
 test("roundtable progress reports long quiet periods without a cancellation countdown", () => {
@@ -2766,7 +2905,7 @@ test("createPersonaProjectScaffold creates minimal baseline and primary generali
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -2855,9 +2994,10 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   assert.match(draft, /name: example-specialist/);
   assert.match(draft, /docs\/shared\/_index\.md/);
 
-  const plan = await planPersonaInitFromManifest(root, "init-data/my-business.yaml");
-  assert.equal(plan.projectName, "my-business");
-  assert.ok(plan.actions.some((action) => action.path === ".pi/agents/generalist.md"));
+  await assert.rejects(
+    () => planPersonaInitFromManifest(root, "init-data/my-business.yaml"),
+    /unresolved template placeholders.*Finish assisted onboarding/,
+  );
   assert.match(formatPersonaInitManifestReport(result), /Pi Persona Init Draft/);
   assert.match(formatPersonaInitManifestReport(result), /Starting assisted setup interview/);
   assert.doesNotMatch(formatPersonaInitManifestReport(result), /Review or edit the YAML/);
@@ -2908,6 +3048,11 @@ test("manifest validation rejects malformed booleans lists models and doc conten
         "    docs/shared/context.md:\n      invalid: true",
       ),
       error: /docs\.files\.docs\/shared\/context\.md must be a string/,
+    },
+    {
+      name: "placeholder",
+      manifest: valid.replace("TEST_BUSINESS_CONTEXT", "add the behavior or spec under test here"),
+      error: /unresolved template placeholders: docs\.files\.docs\/shared\/context\.md/,
     },
   ];
 
@@ -2960,7 +3105,7 @@ test("manifest init plans applies and reports status for a starter layer", async
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -3091,7 +3236,7 @@ Shared pilot context.
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -3156,7 +3301,7 @@ Shared pilot context.
 
   const duplicateDoctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.31.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });

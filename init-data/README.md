@@ -14,6 +14,9 @@ the Pi session. Answer the questions in chat; the assistant should edit the YAML
 for you, call `persona_init` to preview the result, ask for explicit approval,
 and only then apply it with `confirmed: true`. Apply includes a doctor report so
 schema or runtime failures cannot be mistaken for successful onboarding.
+Planning and apply reject unchanged starter placeholders. Doctor also rejects
+known starter placeholders that remain in active persona files or declared
+docs, including the incomplete-spec markers caught during manual verification.
 
 Advanced users can still copy `_template.yaml` by hand when they already know
 the exact operating layer they want.

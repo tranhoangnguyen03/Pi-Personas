@@ -12,7 +12,7 @@ export function createRoundtableProgressTracker(roster, options = {}) {
       return formatRoundtablePhase(entries, agents.length);
     },
     current(entries, latest) {
-      return formatRoundtableActivity(entries, latest);
+      return formatRoundtableActivity(entries, latest, agents, options.moderator ?? "moderator");
     },
   });
 }
@@ -26,14 +26,39 @@ function createObservableProgressTracker(title, options = {}) {
   const seenSources = new Set();
   const seenFailures = new Set();
   const toolCounts = new Map();
+  const entryStates = new Map();
   let lastUpdateAt = startedAt;
   let latest = {};
+
+  const entries = () => [...entryStates.values()].sort((left, right) => finiteNumber(left.index) - finiteNumber(right.index));
+  const snapshot = (now = Date.now()) => {
+    const currentEntries = entries();
+    return {
+      elapsedMs: Math.max(0, now - startedAt),
+      idleMs: Math.max(0, now - lastUpdateAt),
+      toolCount: currentEntries.length > 0
+        ? currentEntries.reduce((sum, entry) => sum + finiteNumber(entry.toolCount), 0)
+        : finiteNumber(latest.toolCount),
+      sources: seenSources.size,
+      recoverableErrors: seenFailures.size,
+      turns: currentEntries.reduce((sum, entry) => sum + finiteNumber(entry.turnCount), 0),
+      tokens: currentEntries.reduce((sum, entry) => sum + finiteNumber(entry.tokens), 0),
+      categories: Object.fromEntries(toolCounts),
+    };
+  };
 
   return {
     update(update, now = Date.now()) {
       latest = update ?? {};
       lastUpdateAt = now;
       for (const entry of progressEntries(latest)) {
+        const key = Number.isFinite(entry.index) ? entry.index : entry.agent;
+        if (key !== undefined) {
+          const merged = { ...(entryStates.get(key) ?? {}), ...entry };
+          if (!Object.hasOwn(entry, "currentTool")) delete merged.currentTool;
+          if (!Object.hasOwn(entry, "currentToolArgs")) delete merged.currentToolArgs;
+          entryStates.set(key, merged);
+        }
         for (const tool of entry.recentTools ?? []) {
           const key = `${tool.endMs ?? ""}\0${tool.tool ?? ""}\0${tool.args ?? ""}`;
           if (seenTools.has(key)) continue;
@@ -51,32 +76,26 @@ function createObservableProgressTracker(title, options = {}) {
     },
 
     format(now = Date.now()) {
-      const entries = progressEntries(latest);
-      const running = entries.find((entry) => entry?.status === "running") ?? entries[0] ?? {};
-      const elapsedMs = Math.max(0, now - startedAt);
-      const idleMs = Math.max(0, now - lastUpdateAt);
-      const toolCount = entries.length > 0
-        ? entries.reduce((sum, entry) => sum + finiteNumber(entry.toolCount), 0)
-        : finiteNumber(latest.toolCount);
-      const tokens = entries.reduce((sum, entry) => sum + finiteNumber(entry.tokens), 0);
-      const turns = entries.reduce((sum, entry) => sum + finiteNumber(entry.turnCount), 0);
+      const currentEntries = entries();
+      const running = currentEntries.find((entry) => entry?.status === "running") ?? currentEntries[0] ?? {};
+      const summary = snapshot(now);
       const facts = [
-        `${formatDuration(elapsedMs)} elapsed`,
-        idleMs < 1_000 ? "active now" : `active ${formatDuration(idleMs)} ago`,
-        `${toolCount} tools`,
+        `${formatDuration(summary.elapsedMs)} elapsed`,
+        summary.idleMs < 1_000 ? "active now" : `active ${formatDuration(summary.idleMs)} ago`,
+        `${summary.toolCount} tools`,
       ];
-      if (seenSources.size > 0) facts.push(`${seenSources.size} sources`);
-      if (seenFailures.size > 0) facts.push(`${seenFailures.size} recoverable errors`);
-      if (turns > 0) facts.push(`${turns} turns`);
-      if (tokens > 0) facts.push(`${formatCount(tokens)} tokens`);
+      if (summary.sources > 0) facts.push(`${summary.sources} sources`);
+      if (summary.recoverableErrors > 0) facts.push(`${summary.recoverableErrors} recoverable errors`);
+      if (summary.turns > 0) facts.push(`${summary.turns} turns`);
+      if (summary.tokens > 0) facts.push(`${formatCount(summary.tokens)} tokens`);
 
       const lines = [
         title,
         "",
-        ...(options.describe?.(entries) ?? []),
+        ...(options.describe?.(currentEntries) ?? []),
         facts.join(" · "),
       ];
-      const current = options.current?.(entries, latest);
+      const current = options.current?.(currentEntries, latest);
       if (current) {
         lines.push(current);
       } else {
@@ -92,35 +111,92 @@ function createObservableProgressTracker(title, options = {}) {
         .map(([category, count]) => `${count} ${category}`);
       if (breakdown.length > 0) lines.push(breakdown.join(" · "));
 
-      if (idleTimeoutMs !== undefined && idleMs >= Math.max(0, idleTimeoutMs - 60_000)) {
-        const remainingMs = Math.max(0, idleTimeoutMs - idleMs);
-        lines.push(`No activity for ${formatDuration(idleMs)} · cancelling in ${formatDuration(remainingMs)} unless activity resumes`);
+      if (idleTimeoutMs !== undefined && summary.idleMs >= Math.max(0, idleTimeoutMs - 60_000)) {
+        const remainingMs = Math.max(0, idleTimeoutMs - summary.idleMs);
+        lines.push(`No activity for ${formatDuration(summary.idleMs)} · cancelling in ${formatDuration(remainingMs)} unless activity resumes`);
       }
       return lines.join("\n");
     },
+
+    snapshot,
   };
 }
 
 function formatRoundtablePhase(entries, rosterSize) {
-  if (rosterSize < 1 || entries.length === 0) return ["Phase: starting"];
-  const running = entries.find((entry) => entry?.status === "running");
-  const pending = entries.find((entry) => entry?.status === "pending");
-  const index = finiteNumber((running ?? pending)?.index);
-  if (index < rosterSize) {
-    return [`Phase: Round 1 · ${completedInRange(entries, 0, rosterSize)}/${rosterSize} specialists complete`];
+  const phase = resolveRoundtablePhase(entries, rosterSize);
+  if (phase.id === "starting") return ["Phase: starting", "Preparing the selected specialist panel."];
+  if (phase.id === "round-1") {
+    return [
+      `Phase: Round 1 — independent positions · ${completedInRange(entries, 0, rosterSize)}/${rosterSize} complete`,
+      "Specialists work separately before seeing peer answers.",
+    ];
   }
-  if (index < rosterSize * 2) {
-    return [`Phase: Round 2 · ${completedInRange(entries, rosterSize, rosterSize * 2)}/${rosterSize} specialists complete`];
+  if (phase.id === "round-2") {
+    return [
+      `Phase: Round 2 — reveal and revise · ${completedInRange(entries, rosterSize, rosterSize * 2)}/${rosterSize} complete`,
+      "Specialists challenge, reinforce, or revise after peer reveal.",
+    ];
   }
-  return ["Phase: moderator synthesis"];
+  return ["Phase: moderator synthesis", "The primary generalist is resolving convergence, tension, and failures."];
 }
 
-function formatRoundtableActivity(entries, latest) {
-  const running = entries.filter((entry) => entry?.status === "running").slice(0, 3);
-  if (running.length === 0) return undefined;
-  const labels = running.map((entry) => `${entry.agent}${entry.currentTool ? `:${entry.currentTool}` : ""}`);
-  const args = running.find((entry) => entry.currentToolArgs)?.currentToolArgs;
-  return `Now: ${labels.join(", ")}${args ? ` · ${truncate(args, 100)}` : latest.currentTool ? ` · ${latest.currentTool}` : ""}`;
+function formatRoundtableActivity(entries, _latest, agents, moderator) {
+  if (agents.length === 0) return undefined;
+  const phase = resolveRoundtablePhase(entries, agents.length);
+  const lines = ["Panel:"];
+  for (let index = 0; index < agents.length; index += 1) {
+    const roundOne = entries.find((entry) => entry.index === index);
+    const roundTwo = entries.find((entry) => entry.index === index + agents.length);
+    if (phase.id === "round-1" || phase.id === "starting") {
+      lines.push(`- ${agents[index]} · ${formatSeatStatus(roundOne, "drafting independent position")}`);
+    } else if (phase.id === "round-2") {
+      lines.push(`- ${agents[index]} · ${roundOne?.status === "completed" ? "✓ independent" : formatSeatStatus(roundOne, "finishing independent position")} · ${formatSeatStatus(roundTwo, "revising after peer reveal")}`);
+    } else {
+      lines.push(`- ${agents[index]} · ${roundTwo?.status === "completed" ? "✓ two rounds complete" : formatSeatStatus(roundTwo, "finishing peer review")}`);
+    }
+  }
+  if (phase.id === "synthesis") {
+    lines.push(`- ${moderator} · ${formatSeatStatus(entries.find((entry) => entry.index >= agents.length * 2), "synthesizing verdict")}`);
+  }
+  lines.push(`Next: ${phase.next}`);
+  return lines.join("\n");
+}
+
+function resolveRoundtablePhase(entries, rosterSize) {
+  if (rosterSize < 1 || entries.length === 0) {
+    return { id: "starting", next: "specialists form independent positions" };
+  }
+  const running = entries.find((entry) => entry?.status === "running");
+  if (running?.index >= rosterSize * 2 || completedInRange(entries, rosterSize, rosterSize * 2) >= rosterSize) {
+    return { id: "synthesis", next: "one managed moderator verdict" };
+  }
+  if (running?.index >= rosterSize || completedInRange(entries, 0, rosterSize) >= rosterSize) {
+    return { id: "round-2", next: "the primary generalist synthesizes the revised positions" };
+  }
+  return { id: "round-1", next: "specialists see peer positions and revise" };
+}
+
+function formatSeatStatus(entry, activeLabel) {
+  if (!entry || entry.status === "pending") return "○ waiting";
+  if (entry.status === "failed" || entry.exitCode > 0) return "✗ failed";
+  if (entry.status === "completed") return "✓ complete";
+  const activity = humanActivity(entry, activeLabel);
+  const facts = [
+    finiteNumber(entry.toolCount) > 0 ? `${entry.toolCount} tools` : undefined,
+    finiteNumber(entry.turnCount) > 0 ? `${entry.turnCount} turns` : undefined,
+  ].filter(Boolean);
+  return `… ${activity}${facts.length > 0 ? ` · ${facts.join(" · ")}` : ""}`;
+}
+
+function humanActivity(entry, fallback) {
+  const tool = String(entry.currentTool ?? "").toLowerCase();
+  if (!tool) return fallback;
+  if (tool.includes("search") || tool.includes("web") || tool.includes("url")) return "searching evidence";
+  if (tool === "read" || tool.includes("file") || tool.includes("pdf")) return "reading declared evidence";
+  if (tool.includes("github") || tool.includes("repo") || tool === "grep" || tool === "find" || tool === "ls") return "inspecting repository evidence";
+  if (tool === "bash") return "checking evidence";
+  if (tool === "edit" || tool === "write") return "unexpected write activity";
+  return `using ${truncate(entry.currentTool, 36)}`;
 }
 
 function completedInRange(entries, start, end) {

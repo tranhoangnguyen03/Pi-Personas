@@ -28,6 +28,10 @@ require `pi-subagents` to be installed and visible to Pi:
 pi install npm:pi-subagents
 ```
 
+Managed round-table delivery requires `pi-subagents` 0.35.0 or newer. Doctor
+warns about older runtimes, and `/persona-roundtable` refuses to start rather
+than expose raw child results, run IDs, or artifact paths.
+
 Installing this repository's npm dependencies is not enough. `pi-subagents`
 must be configured as a Pi package so Pi can expose its child-session behavior.
 Its native supervisor and result channels are sufficient; external
@@ -119,7 +123,11 @@ Run an explicit multi-persona workflow:
 The command activates the primary generalist, which selects one to five relevant
 specialists with a schema-validated rationale and calls `persona_roundtable`
 exactly once. That single child workflow runs both discussion rounds and the
-primary-generalist synthesis over only the selected roster.
+primary-generalist synthesis over only the selected roster. Its bridge request
+uses response-only delivery so the clean tool result is the sole completion
+message in the parent conversation. The tool panel discloses the query, context,
+selected specialists, reasons, three-stage process, per-persona status, current
+activity, next step, and a compact execution summary.
 
 For richer project setup, use assisted manifest drafting:
 
@@ -182,7 +190,8 @@ reload. A running consult has no overall time limit, reports live elapsed time,
 tool activity, sources, errors, turns, and tokens in its `[pi-persona]` box,
 and cancels only after three minutes without a child progress event. Round-table
 progress uses the same in-place box and additionally shows the active round,
-specialist completion count, and moderator-synthesis phase. Once started, a
+specialist completion count, per-persona work state, phase purpose, upcoming
+step, and moderator-synthesis phase. Once started, a
 round-table has neither an overall deadline nor inactivity cancellation; use
 the normal tool cancellation control when you want to stop it.
 

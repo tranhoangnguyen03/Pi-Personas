@@ -32,6 +32,7 @@ import {
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
   parsePersonaNewArgs,
+  PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
   planPersonaInitFromManifest,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
@@ -202,6 +203,51 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         description: "fresh by default; fork only when full conversation context is deliberately required",
       })),
     }),
+    renderCall(args, theme, context) {
+      const selections = Array.isArray(args.selections) ? args.selections : [];
+      let text = theme.fg("toolTitle", theme.bold(`Round-table · ${selections.length || "…"} specialists`));
+      text += `\n${theme.fg("muted", `Query: ${context.expanded ? args.query || "(query pending)" : truncatePanelText(args.query || "(query pending)", 100)}`)}`;
+      text += `\n${theme.fg("dim", formatRoundtableContextLine(args.context))}`;
+      if (context.expanded) {
+        text += `\n${theme.fg("muted", "Moderator: active primary generalist")}`;
+        text += `\n\n${theme.fg("muted", "Selected panel:")}`;
+        for (const selection of selections) {
+          text += `\n${theme.fg("toolTitle", selection.name || "(unknown)")} ${theme.fg("dim", `— ${selection.reason || "reason pending"}`)}`;
+        }
+        text += `\n\n${theme.fg("muted", "Process:")}`;
+        text += `\n${theme.fg("dim", "1. Independent positions")}`;
+        text += `\n${theme.fg("dim", "2. Peer reveal and revision")}`;
+        text += `\n${theme.fg("dim", "3. Primary-generalist synthesis")}`;
+      } else {
+        const names = selections.map((selection: any) => selection.name).filter(Boolean).join(", ");
+        if (names) text += `\n${theme.fg("dim", `Panel: ${names}`)}`;
+        text += `\n${theme.fg("dim", keyHint("app.tools.expand", "to inspect selection"))}`;
+      }
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme) {
+      const output = firstToolResultText(result);
+      if (isPartial) {
+        return new Text(theme.fg("toolOutput", stripRoundtableProgressHeading(output)), 0, 0);
+      }
+
+      const failed = result.isError === true;
+      const status = failed
+        ? theme.fg("error", "✗ Round-table failed")
+        : theme.fg("success", "✓ Round-table complete");
+      const process = formatRoundtableProcessLine(result.details?.process);
+      if (!expanded) {
+        return new Text(`${status}${process ? `\n${theme.fg("dim", process)}` : ""}`, 0, 0);
+      }
+
+      const container = new Container();
+      container.addChild(new Text(`${status}${process ? `\n${theme.fg("dim", process)}` : ""}`, 0, 0));
+      if (output) {
+        container.addChild(new Spacer(1));
+        container.addChild(new Markdown(output, 0, 0, getMarkdownTheme()));
+      }
+      return container;
+    },
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let progress: ReturnType<typeof createRoundtableProgressReporter> | undefined;
       try {
@@ -216,7 +262,9 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         if (activePersonaName !== roundtable.generalist.name || pendingRoundtable.moderator !== roundtable.generalist.name) {
           throw new Error(`persona_roundtable requires active primary generalist '${roundtable.generalist.name}'`);
         }
-        await assertPersonaRuntimeReady(ctx.cwd);
+        await assertPersonaRuntimeReady(ctx.cwd, {
+          minimumPiSubagentsVersion: PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+        });
         pendingRoundtable = undefined;
         progress = createRoundtableProgressReporter(onUpdate, roundtable);
         const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams, {
@@ -226,6 +274,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             progress?.update(update);
           },
         });
+        const process = createRoundtableProcessDetails(roundtable, response, progress.summary());
         if (response.isError === true) {
           return {
             content: [{ type: "text", text: formatRoundtableBridgeFailure(roundtable, response) }],
@@ -234,6 +283,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
               moderator: roundtable.generalist.name,
               roster: roundtable.roster.map((agent: any) => agent.name),
               context: roundtable.context,
+              process,
               result: response.result,
             },
           };
@@ -252,6 +302,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             moderator: roundtable.generalist.name,
             roster: roundtable.roster.map((agent: any) => agent.name),
             context: roundtable.context,
+            process,
             answer,
             result: response.result,
           },
@@ -531,7 +582,9 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       try {
         await registerProjectCommands(ctx.cwd);
         const selectionRequest = await resolveRoundtableSelectionRequest(ctx.cwd, { query });
-        await assertPersonaRuntimeReady(ctx.cwd);
+        await assertPersonaRuntimeReady(ctx.cwd, {
+          minimumPiSubagentsVersion: PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+        });
         pendingRoundtable = {
           cwd: ctx.cwd,
           query: selectionRequest.query,
@@ -600,6 +653,12 @@ function formatConsultContextLine(context: unknown): string {
     : "Context: fresh · conversation history not included";
 }
 
+function formatRoundtableContextLine(context: unknown): string {
+  return context === "fork"
+    ? "Context: fork · current conversation branch inherited"
+    : "Context: fresh · specialists receive only resolved persona context";
+}
+
 function truncatePanelText(value: unknown, maxLength: number): string {
   const text = String(value).replace(/\s+/g, " ").trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
@@ -612,6 +671,45 @@ function firstToolResultText(result: any): string {
 
 function stripConsultProgressHeading(value: string): string {
   return value.replace(/^\[pi-persona\] Consulting [^\n]+\n+/, "").trim();
+}
+
+function stripRoundtableProgressHeading(value: string): string {
+  return value.replace(/^\[pi-persona\] Round-table\n+/, "").trim();
+}
+
+function createRoundtableProcessDetails(roundtable: any, response: any, summary: any) {
+  const results = Array.isArray(response?.result?.details?.results) ? response.result.details.results : [];
+  return {
+    specialists: roundtable.roster.length,
+    rounds: 2,
+    expectedSteps: roundtable.roster.length * 2 + 1,
+    completedSteps: results.filter((entry: any) => entry?.exitCode === 0 || entry?.status === "completed").length,
+    failedSteps: results.filter((entry: any) => entry?.exitCode > 0 || entry?.status === "failed").length,
+    ...summary,
+  };
+}
+
+function formatRoundtableProcessLine(process: any): string {
+  if (!process) return "";
+  const parts = [
+    `${process.specialists} specialists`,
+    `${process.rounds} rounds`,
+    `${process.completedSteps}/${process.expectedSteps} steps complete`,
+    `${formatPanelDuration(process.elapsedMs)} elapsed`,
+  ];
+  if (process.toolCount > 0) parts.push(`${process.toolCount} tools`);
+  if (process.turns > 0) parts.push(`${process.turns} turns`);
+  if (process.categories?.files > 0) parts.push(`${process.categories.files} files`);
+  if (process.sources > 0) parts.push(`${process.sources} external sources`);
+  if (process.recoverableErrors > 0) parts.push(`${process.recoverableErrors} recoverable errors`);
+  if (process.failedSteps > 0) parts.push(`${process.failedSteps} failed steps`);
+  return parts.join(" · ");
+}
+
+function formatPanelDuration(value: unknown): string {
+  const seconds = Math.max(0, Math.floor((Number(value) || 0) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}:${String(seconds % 60).padStart(2, "0")}` : `${seconds}s`;
 }
 
 function createConsultProgressReporter(onUpdate: any, agent: string) {
@@ -649,6 +747,7 @@ function createConsultProgressReporter(onUpdate: any, agent: string) {
 function createRoundtableProgressReporter(onUpdate: any, roundtable: any) {
   const tracker = createRoundtableProgressTracker(roundtable.roster.map((agent: any) => agent.name), {
     idleTimeoutMs: false,
+    moderator: roundtable.generalist.name,
   });
   let latestUpdate: unknown;
   let lastPublishedAt = 0;
@@ -674,6 +773,9 @@ function createRoundtableProgressReporter(onUpdate: any, roundtable: any) {
       latestUpdate = update;
       tracker.update(update);
       publish(firstUpdate);
+    },
+    summary() {
+      return tracker.snapshot();
     },
     stop() {
       clearInterval(heartbeat);
