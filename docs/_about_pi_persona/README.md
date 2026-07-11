@@ -14,6 +14,7 @@ repo.
    integration points, and verification strategy.
 4. [`../../init-data/README.md`](../../init-data/README.md) - manifest-backed project
    initialization inputs.
+5. [`../../RELEASING.md`](../../RELEASING.md) - release verification and publish procedure.
 
 ## Repo Docs Versus Generated Project Docs
 
@@ -33,6 +34,6 @@ documentation folders in this repository.
 - Keep these docs about the current state, not implementation history.
 - When behavior changes, update `blueprint.md` or `design.md` in the same
   change as the code and tests.
-- Keep install claims conservative while `package.json` is private.
+- Keep install and compatibility claims aligned with the tested public package metadata.
 - Do not reintroduce historical phase logs or transcript dumps into this folder.
 - Prefer one consolidated design section over several stale narrow documents.

@@ -1,7 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { discoverPersonaProject } from "./agents.js";
+import {
+  discoverPersonaProject,
+  resolveWorkspacePathForAccess,
+} from "./agents.js";
+import { formatYamlField, formatYamlScalar } from "./frontmatter.js";
+import {
+  isDirectPersonaCommandName,
+  isSafeAgentName,
+} from "./schema.js";
 
 const ALLOWED_OPTIONS = new Set(["role", "description", "docs", "skills"]);
 const LIST_OPTIONS = new Set(["docs", "skills"]);
@@ -19,25 +27,25 @@ export function normalizeAgentName(input) {
     throw new Error("agent name must contain at least one letter or number");
   }
 
-  return normalized;
+  return /^[a-z]/.test(normalized) ? normalized : `agent-${normalized}`;
 }
 
 export function renderAgentScaffold(agentName, options = {}) {
+  if (!isSafeAgentName(agentName)) {
+    throw new Error("agent name must begin with a lowercase letter and contain only lowercase letters, numbers, or hyphens");
+  }
   const title = options.title ?? titleFromName(agentName);
   const role = normalizeRole(options.role ?? "specialist");
   const description = normalizeDescription(options.description ?? `${title} specialist.`);
   const primaryLine = role === "generalist" && typeof options.primary === "boolean"
     ? `primary: ${options.primary}\n`
     : "";
-  const docs = normalizeList(options.docs).join(", ");
-  const skills = normalizeList(options.skills).join(", ");
 
   return `---
 name: ${agentName}
 role: ${role}
-${primaryLine}description: ${description}
-docs:${docs ? ` ${docs}` : ""}
-skills:${skills ? ` ${skills}` : ""}
+${primaryLine}${formatYamlField("description", description)}
+${renderInlineListField("docs", options.docs)}${renderInlineListField("skills", options.skills)}
 ---
 You are ${agentName}.
 
@@ -104,7 +112,9 @@ export async function createAgentScaffold(root, rawName, options = {}) {
   const primary = await defaultPrimaryForRole(root, role);
   const warnings = buildPrimaryWarnings(agentName, primary);
   const relativePath = `.pi/agents/${agentName}.md`;
-  const filePath = path.join(root, relativePath);
+  const resolved = await resolveWorkspacePathForAccess(root, relativePath);
+  if (!resolved.ok) throw new Error(`agent path must stay inside workspace: ${relativePath}`);
+  const filePath = resolved.path;
   const content = renderAgentScaffold(agentName, {
     ...options,
     role,
@@ -167,7 +177,7 @@ export function formatAgentScaffoldCreatedMessage(result) {
   const lines = [
     `Created ${result.relativePath}`,
     "",
-    `Launch: /${result.agentName}`,
+    `Launch: ${formatLaunchCommand(result.agentName)}`,
   ];
   if (result.options.docs.length > 0) {
     lines.push(`Docs: ${result.options.docs.join(", ")}`);
@@ -219,7 +229,9 @@ export function formatPersonaProjectScaffoldCreatedMessage(result) {
 }
 
 async function writeScaffoldFile(root, relativePath, content, created, skipped) {
-  const filePath = path.join(root, relativePath);
+  const resolved = await resolveWorkspacePathForAccess(root, relativePath);
+  if (!resolved.ok) throw new Error(`scaffold path must stay inside workspace: ${relativePath}`);
+  const filePath = resolved.path;
   await mkdir(path.dirname(filePath), { recursive: true });
   try {
     await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
@@ -236,7 +248,7 @@ async function writeScaffoldFile(root, relativePath, content, created, skipped) 
 function renderBaselineScaffold() {
   return `---
 docs: docs/shared/
-skills:
+skills: []
 ---
 Shared operating context for every Pi Persona agent.
 
@@ -285,16 +297,35 @@ function normalizeRole(value) {
 }
 
 function normalizeDescription(value) {
-  return String(value).trim();
+  const description = String(value).trim();
+  if (!description) throw new Error("description must be a non-empty string");
+  return description;
 }
 
 function normalizeList(value) {
   if (!value) return [];
   const values = Array.isArray(value) ? value : String(value).split(",");
   return values
-    .flatMap((entry) => String(entry).split(","))
+    .flatMap((entry) => {
+      if (typeof entry !== "string") {
+        throw new Error("list values must be non-empty strings");
+      }
+      return entry.split(",");
+    })
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function renderInlineListField(field, value) {
+  const values = normalizeList(value);
+  if (values.length === 0) return `${field}: []\n`;
+  return `${field}: ${formatYamlScalar(values.join(", "))}\n`;
+}
+
+function formatLaunchCommand(agentName) {
+  return isDirectPersonaCommandName(agentName)
+    ? `/${agentName}`
+    : `/persona use ${agentName}`;
 }
 
 function parseOptionToken(token) {

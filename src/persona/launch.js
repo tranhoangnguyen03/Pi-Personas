@@ -1,6 +1,7 @@
 import { resolveAgentScope } from "./resolver.js";
 import { getPrimaryGeneralistState } from "./agents.js";
 import { formatDocReadPreamble } from "./runtime.js";
+import { isDirectPersonaCommandName } from "./schema.js";
 
 export function buildAgentLaunchRequest(scope, options = {}) {
   return {
@@ -39,6 +40,7 @@ export function formatPersonaList(project) {
     lines.push(`  ${agent.description}`);
     lines.push(`  docs: ${agent.docs.length ? agent.docs.join(", ") : "none"}`);
     lines.push(`  skills: ${agent.skills.length ? agent.skills.join(", ") : "none"}`);
+    lines.push(`  launch: ${isDirectPersonaCommandName(agent.name) ? `/${agent.name}` : `/persona use ${agent.name}`}`);
   }
 
   return lines.join("\n");

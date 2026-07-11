@@ -1,8 +1,15 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  getMarkdownTheme,
+  keyHint,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import {
   assertPersonaRuntimeReady,
+  createConsultProgressTracker,
+  createRoundtableProgressTracker,
   createAgentScaffold,
   createDocsIndex,
   createPersonaInitDraft,
@@ -10,6 +17,7 @@ import {
   applyPersonaInitFromManifest,
   discoverPersonaProject,
   extractConsultAnswer,
+  extractRoundtableAnswer,
   formatAgentScaffoldCreatedMessage,
   formatConsultBridgeResult,
   formatDocsIndexReport,
@@ -18,7 +26,9 @@ import {
   formatPersonaInitManifestReport,
   formatPersonaProjectScaffoldCreatedMessage,
   formatPersonaList,
-  formatRoundtableRosterPreview,
+  formatRoundtableBridgeFailure,
+  formatRoundtableBridgeResult,
+  isDirectPersonaCommandName,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
   parsePersonaNewArgs,
@@ -26,6 +36,7 @@ import {
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
+  resolveRoundtableSelectionRequest,
   runDoctor,
   sendPersonaOutput,
   runSubagentBridgeRequest,
@@ -33,31 +44,16 @@ import {
 } from "../src/persona/index.js";
 
 const ACTIVE_PERSONA_STATE_TYPE = "pi-persona-active";
-const REGISTERED_PERSONA_COMMANDS = new Set<string>();
-const PROGRESS_FRAMES = ["-", "\\", "|", "/"];
-const VISIBLE_PROGRESS_MS = 8_000;
+const CONSULT_IDLE_TIMEOUT_MS = 180_000;
+const CONSULT_HEARTBEAT_MS = 10_000;
 const IS_PI_SUBAGENT_CHILD = process.env.PI_SUBAGENT_CHILD === "1";
-const RESERVED_COMMANDS = new Set([
-  "agent",
-  "chain",
-  "compact",
-  "fork",
-  "parallel",
-  "persona",
-  "persona-list",
-  "persona-roundtable",
-  "resume",
-  "run",
-  "run-chain",
-  "subagents-doctor",
-  "subagents-models",
-  "tree",
-]);
 
 export default function registerPiPersona(pi: ExtensionAPI): void {
   if (IS_PI_SUBAGENT_CHILD) return;
 
   let activePersonaName: string | undefined;
+  let pendingRoundtable: { cwd: string; query: string; moderator: string } | undefined;
+  const registeredPersonaCommands = new Set<string>();
 
   const updateActivePersonaStatus = (ctx: any) => {
     ctx.ui?.setStatus?.(
@@ -86,7 +82,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "persona_consult",
-    label: "Persona Consult",
+    label: "pi-persona",
     description: "Ask a known Pi Persona peer for a focused consult. The tool runs the child-safe pi-subagents request internally and returns the result.",
     promptSnippet: "Use persona_consult only when the active Pi Persona needs another known persona's expertise. Provide a narrow requester-written summary and synthesize the returned consultant answer.",
     parameters: Type.Object({
@@ -98,19 +94,66 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       expectedOutput: Type.Optional(Type.String({ description: "Requested answer shape" })),
       context: Type.Optional(Type.String({
         enum: ["fresh", "fork"],
-        description: "fresh by default; fork only when full conversation context is deliberately required",
+        description: "fresh by default; fork inherits the current conversation branch",
       })),
     }),
-    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+    renderCall(args, theme, context) {
+      const consultant = args.consultant || "consultant";
+      const question = args.question || "(query pending)";
+      const contextLine = formatConsultContextLine(args.context);
+      let text = theme.fg("toolTitle", theme.bold(`Consulting ${consultant}`));
+      text += `\n${theme.fg("muted", `Query: ${context.expanded ? question : truncatePanelText(question, 100)}`)}`;
+      text += `\n${theme.fg("dim", contextLine)}`;
+
+      if (context.expanded) {
+        text += `\n\n${theme.fg("muted", `Requester: ${args.requester || "(unknown)"}`)}`;
+        if (args.summary) text += `\n\n${theme.fg("muted", "Summary:")}\n${theme.fg("dim", args.summary)}`;
+        if (args.constraints) text += `\n\n${theme.fg("muted", "Constraints:")}\n${theme.fg("dim", args.constraints)}`;
+        if (args.expectedOutput) text += `\n\n${theme.fg("muted", "Expected output:")}\n${theme.fg("dim", args.expectedOutput)}`;
+      } else {
+        text += `\n${theme.fg("dim", keyHint("app.tools.expand", "to expand"))}`;
+      }
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme) {
+      const output = firstToolResultText(result);
+      if (isPartial) {
+        return new Text(theme.fg("toolOutput", stripConsultProgressHeading(output)), 0, 0);
+      }
+
+      const failed = result.isError === true;
+      const status = failed
+        ? theme.fg("error", "✗ Consultation failed")
+        : theme.fg("success", "✓ Consultation complete");
+      if (!expanded) {
+        return new Text(status, 0, 0);
+      }
+
+      const container = new Container();
+      container.addChild(new Text(status, 0, 0));
+      if (output) {
+        container.addChild(new Spacer(1));
+        container.addChild(new Markdown(output, 0, 0, getMarkdownTheme()));
+      }
+      return container;
+    },
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      let progress: ReturnType<typeof createConsultProgressReporter> | undefined;
       try {
+        restoreActivePersona(ctx);
+        if (!activePersonaName) {
+          throw new Error("persona_consult requires an active persona; run /persona use <name> first");
+        }
+        if (params.requester !== activePersonaName) {
+          throw new Error(`persona_consult requester must match active persona '${activePersonaName}'`);
+        }
         const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
         await assertPersonaRuntimeReady(ctx.cwd);
+        progress = createConsultProgressReporter(onUpdate, consult.consultant.name);
         const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams, {
+          signal,
           onUpdate(update: unknown) {
-            onUpdate?.({
-              content: [{ type: "text", text: formatSubagentProgress(update, consult.consultant.name) }],
-              details: update,
-            });
+            progress?.update(update);
           },
         });
         const answer = await extractConsultAnswer(response);
@@ -133,37 +176,128 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           isError: true,
           details: { error: true },
         };
+      } finally {
+        progress?.stop();
       }
     },
   });
 
+  pi.registerTool({
+    name: "persona_roundtable",
+    label: "pi-persona",
+    description: "Run one blueprint round-table over specialists selected by the active primary generalist.",
+    promptSnippet: "Use persona_roundtable exactly once after /persona-roundtable asks the primary generalist to select a roster. Preserve the user's query, give one concrete reason per specialist, and present the returned moderator synthesis once.",
+    parameters: Type.Object({
+      query: Type.String({ description: "The user's round-table query, unchanged" }),
+      selections: Type.Array(Type.Object({
+        name: Type.String({ description: "Selected specialist persona name" }),
+        reason: Type.String({ description: "Concrete reason this specialist is useful" }),
+      }, { additionalProperties: false }), {
+        minItems: 1,
+        maxItems: 5,
+        description: "One to five specialists selected from the project roster",
+      }),
+      context: Type.Optional(Type.String({
+        enum: ["fresh", "fork"],
+        description: "fresh by default; fork only when full conversation context is deliberately required",
+      })),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      let progress: ReturnType<typeof createRoundtableProgressReporter> | undefined;
+      try {
+        restoreActivePersona(ctx);
+        if (!pendingRoundtable || pendingRoundtable.cwd !== ctx.cwd) {
+          throw new Error("persona_roundtable requires a pending /persona-roundtable request");
+        }
+        if (params.query.trim() !== pendingRoundtable.query) {
+          throw new Error("persona_roundtable query must match the pending /persona-roundtable request unchanged");
+        }
+        const roundtable = await resolveRoundtableLaunchRequest(ctx.cwd, params);
+        if (activePersonaName !== roundtable.generalist.name || pendingRoundtable.moderator !== roundtable.generalist.name) {
+          throw new Error(`persona_roundtable requires active primary generalist '${roundtable.generalist.name}'`);
+        }
+        await assertPersonaRuntimeReady(ctx.cwd);
+        pendingRoundtable = undefined;
+        progress = createRoundtableProgressReporter(onUpdate, roundtable);
+        const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams, {
+          signal,
+          idleTimeoutMs: false,
+          onUpdate(update: unknown) {
+            progress?.update(update);
+          },
+        });
+        if (response.isError === true) {
+          return {
+            content: [{ type: "text", text: formatRoundtableBridgeFailure(roundtable, response) }],
+            isError: true,
+            details: {
+              moderator: roundtable.generalist.name,
+              roster: roundtable.roster.map((agent: any) => agent.name),
+              context: roundtable.context,
+              result: response.result,
+            },
+          };
+        }
+        const answer = await extractRoundtableAnswer(response, roundtable.generalist.name);
+        const isError = answer.source === "missing";
+        return {
+          content: [{
+            type: "text",
+            text: isError
+              ? formatRoundtableBridgeFailure(roundtable, response)
+              : formatRoundtableBridgeResult(roundtable, answer.text),
+          }],
+          isError: isError || undefined,
+          details: {
+            moderator: roundtable.generalist.name,
+            roster: roundtable.roster.map((agent: any) => agent.name),
+            context: roundtable.context,
+            answer,
+            result: response.result,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+          details: { error: true },
+        };
+      } finally {
+        progress?.stop();
+      }
+    },
+  });
+
+  const activatePersona = async (agentName: string, args: string, ctx: any) => {
+    try {
+      const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, {
+        task: normalizeCommandText(args),
+      });
+      setActivePersona(ctx, launch.agentName);
+      if (!launch.userMessage) {
+        ctx.ui.notify(`Active persona: /${launch.agentName}`, "info");
+        return;
+      }
+      pi.sendUserMessage(
+        launch.userMessage,
+        ctx.isIdle() ? undefined : { deliverAs: "followUp" },
+      );
+    } catch (error) {
+      sendPersonaOutput(pi, ctx, formatPersonaCommandError(agentName, error), "error");
+    }
+  };
+
   const registerPersonaCommand = (agentName: string) => {
-    if (!isSafeCommandName(agentName)) return;
-    if (RESERVED_COMMANDS.has(agentName)) return;
-    if (REGISTERED_PERSONA_COMMANDS.has(agentName)) return;
+    if (!isDirectPersonaCommandName(agentName)) return;
+    if (registeredPersonaCommands.has(agentName)) return;
 
     pi.registerCommand(agentName, {
       description: `Activate Pi Persona agent: ${agentName}`,
       handler: async (args, ctx) => {
-        try {
-          const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, {
-            task: normalizeCommandText(args),
-          });
-          setActivePersona(ctx, launch.agentName);
-          if (!launch.userMessage) {
-            ctx.ui.notify(`Active persona: /${launch.agentName}`, "info");
-            return;
-          }
-          pi.sendUserMessage(
-            launch.userMessage,
-            ctx.isIdle() ? undefined : { deliverAs: "followUp" },
-          );
-        } catch (error) {
-          sendPersonaOutput(pi, ctx, formatPersonaCommandError(agentName, error), "error");
-        }
+        await activatePersona(agentName, args, ctx);
       },
     });
-    REGISTERED_PERSONA_COMMANDS.add(agentName);
+    registeredPersonaCommands.add(agentName);
   };
 
   registerPersonaCommand("generalist");
@@ -175,6 +309,58 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     }
     return project;
   };
+
+  pi.registerTool({
+    name: "persona_init",
+    label: "Persona Init",
+    description: "Plan, apply, or inspect a Pi Persona setup manifest during assisted authoring.",
+    promptSnippet: "Use persona_init with action plan before apply. Ask for explicit user approval, then call action apply with confirmed: true. Apply includes persona doctor verification; use status afterward.",
+    parameters: Type.Object({
+      action: Type.String({
+        enum: ["plan", "apply", "status"],
+        description: "Manifest action to perform",
+      }),
+      source: Type.String({ description: "Workspace-relative manifest YAML path" }),
+      confirmed: Type.Optional(Type.Boolean({
+        description: "Required for apply; set true only after explicit user approval",
+      })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      try {
+        let result;
+        let doctor;
+        if (params.action === "plan") {
+          result = await planPersonaInitFromManifest(ctx.cwd, params.source);
+        } else if (params.action === "status") {
+          result = await statusPersonaInitFromManifest(ctx.cwd, params.source);
+        } else {
+          if (params.confirmed !== true) {
+            throw new Error("persona_init apply requires confirmed: true after explicit user approval");
+          }
+          result = await applyPersonaInitFromManifest(ctx.cwd, params.source);
+          await registerProjectCommands(ctx.cwd);
+          doctor = await runDoctor(ctx.cwd);
+        }
+        return {
+          content: [{
+            type: "text",
+            text: [
+              formatPersonaInitManifestReport(result, { doctorIncluded: Boolean(doctor) }),
+              doctor ? formatDoctorReport(doctor) : "",
+            ].filter(Boolean).join("\n\n"),
+          }],
+          isError: doctor?.status === "error" || undefined,
+          details: doctor ? { ...result, doctor } : result,
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+          details: { error: true },
+        };
+      }
+    },
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     try {
@@ -199,9 +385,11 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         systemPrompt: `${event.systemPrompt}\n\n${launch.systemPrompt}`,
       };
     } catch (error) {
+      const failedPersonaName = activePersonaName;
       const message = error instanceof Error ? error.message : String(error);
+      setActivePersona(ctx, undefined);
       return {
-        systemPrompt: `${event.systemPrompt}\n\n## Pi Persona\n\nActive persona /${activePersonaName} could not be resolved: ${message}. Answer normally and tell the user to run /persona status or /persona clear.`,
+        systemPrompt: `${event.systemPrompt}\n\n## Pi Persona\n\nPreviously active persona /${failedPersonaName} is not available in this workspace: ${message}. Answer normally and tell the user to run /persona-list or choose another persona.`,
       };
     }
   });
@@ -211,6 +399,16 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
+
+      if (subcommand === "use") {
+        const parsed = parsePersonaUseArgs(trimmed.slice("use".length));
+        if (!parsed) {
+          sendPersonaOutput(pi, ctx, "Usage: /persona use <name> [query]", "error");
+          return;
+        }
+        await activatePersona(parsed.agentName, parsed.task, ctx);
+        return;
+      }
 
       if (subcommand === "status") {
         restoreActivePersona(ctx);
@@ -332,50 +530,19 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
       try {
         await registerProjectCommands(ctx.cwd);
-        const roundtable = await resolveRoundtableLaunchRequest(ctx.cwd, { query });
+        const selectionRequest = await resolveRoundtableSelectionRequest(ctx.cwd, { query });
         await assertPersonaRuntimeReady(ctx.cwd);
-        const preview = formatRoundtableRosterPreview(roundtable);
-        const progress = createRoundtableProgress(pi, ctx);
-        sendPersonaOutput(
-          pi,
-          ctx,
-          `${preview}\n\nRound-table in progress. Watch the Pi status line for live progress; compact updates will appear until the result returns.`,
-          "info",
-        );
-        try {
-          const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams, {
-            onUpdate(update: unknown) {
-              progress.update(update);
-            },
-          });
-          const text = bridgeResponseText(response);
-          sendPersonaOutput(pi, ctx, `${preview}\n\n## Result\n\n${text}`, response.isError ? "error" : "info");
-        } finally {
-          progress.stop();
-        }
+        pendingRoundtable = {
+          cwd: ctx.cwd,
+          query: selectionRequest.query,
+          moderator: selectionRequest.generalist.name,
+        };
+        await activatePersona(selectionRequest.generalist.name, selectionRequest.userMessage, ctx);
       } catch (error) {
         sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
       }
     },
   });
-}
-
-function isSafeCommandName(name: string): boolean {
-  return /^[a-z][a-z0-9-]*$/.test(name);
-}
-
-function bridgeResponseText(response: any): string {
-  if (response?.errorText) return response.errorText;
-  const content = response?.result?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => part?.text)
-      .filter((text): text is string => typeof text === "string" && text.length > 0)
-      .join("\n")
-      .trim() || "(no output)";
-  }
-  return "(no output)";
 }
 
 function normalizeCommandText(value: string): string {
@@ -395,11 +562,15 @@ function formatPersonaCommandError(agentName: string, error: unknown): string {
   if (agentName === "generalist" && message === "Unknown agent: generalist") {
     return "No Pi Persona `/generalist` agent found. Run `/persona init` first, or use `/persona-list` if this project uses a different primary persona name.";
   }
+  if (message === `Unknown agent: ${agentName}`) {
+    return `/${agentName} is not available in this workspace. Run /persona-list.`;
+  }
   return message;
 }
 
 function personaUsage(): string {
   return [
+    "Usage: /persona use <name> [query]",
     "Usage: /persona init",
     "Usage: /persona init draft --out <file>",
     "Usage: /persona init --plan --from <file>",
@@ -414,84 +585,98 @@ function personaUsage(): string {
   ].join("\n");
 }
 
-function createRoundtableProgress(pi: ExtensionAPI, ctx: any) {
-  return createProgressReporter(pi, ctx, {
-    statusKey: "pi-persona-roundtable",
-    statusLabel: "round-table",
-    visibleLabel: "Round-table progress",
-    format(update: unknown) {
-      return formatSubagentProgress(update);
-    },
-  });
+function parsePersonaUseArgs(value: string): { agentName: string; task: string } | null {
+  const match = value.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+  return {
+    agentName: match[1],
+    task: match[2] ?? "",
+  };
 }
 
-function createProgressReporter(
-  pi: ExtensionAPI,
-  ctx: any,
-  options: {
-    statusKey: string;
-    statusLabel: string;
-    visibleLabel: string;
-    format(update: unknown): string;
-  },
-) {
-  let stopped = false;
-  let frameIndex = 0;
-  let lastVisibleAt = Date.now();
-  let latestDetail = "starting";
+function formatConsultContextLine(context: unknown): string {
+  return context === "fork"
+    ? "Context: fork · current conversation branch inherited"
+    : "Context: fresh · conversation history not included";
+}
 
-  const render = (detail = latestDetail, visible = false) => {
-    if (stopped) return;
-    latestDetail = detail || latestDetail;
-    const frame = PROGRESS_FRAMES[frameIndex % PROGRESS_FRAMES.length];
-    frameIndex += 1;
-    ctx.ui?.setStatus?.(options.statusKey, `${options.statusLabel} ${frame} ${latestDetail}`);
+function truncatePanelText(value: unknown, maxLength: number): string {
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
 
+function firstToolResultText(result: any): string {
+  const part = result?.content?.find((entry: any) => entry?.type === "text");
+  return typeof part?.text === "string" ? part.text.trim() : "";
+}
+
+function stripConsultProgressHeading(value: string): string {
+  return value.replace(/^\[pi-persona\] Consulting [^\n]+\n+/, "").trim();
+}
+
+function createConsultProgressReporter(onUpdate: any, agent: string) {
+  const tracker = createConsultProgressTracker(agent, { idleTimeoutMs: CONSULT_IDLE_TIMEOUT_MS });
+  let latestUpdate: unknown;
+  let lastPublishedAt = 0;
+
+  const publish = (force = false) => {
+    if (!onUpdate) return;
     const now = Date.now();
-    if (visible && now - lastVisibleAt >= VISIBLE_PROGRESS_MS) {
-      lastVisibleAt = now;
-      sendPersonaOutput(pi, ctx, `${options.visibleLabel} ${frame}: ${latestDetail}`, "info");
-    }
+    if (!force && now - lastPublishedAt < 1_000) return;
+    lastPublishedAt = now;
+    onUpdate({
+      content: [{ type: "text", text: tracker.format(now) }],
+      details: latestUpdate,
+    });
   };
 
-  const timer = setInterval(() => render("running", true), 750);
-  (timer as any).unref?.();
-  render("starting");
+  const heartbeat = setInterval(() => publish(true), CONSULT_HEARTBEAT_MS);
+  (heartbeat as any).unref?.();
+  publish(true);
 
   return {
     update(update: unknown) {
-      render(options.format(update), true);
+      latestUpdate = update;
+      tracker.update(update);
+      publish();
     },
     stop() {
-      stopped = true;
-      clearInterval(timer);
-      ctx.ui?.setStatus?.(options.statusKey, undefined);
+      clearInterval(heartbeat);
     },
   };
 }
 
-function formatSubagentProgress(update: any, fallbackAgent = "agent"): string {
-  const progress = Array.isArray(update?.progress) ? update.progress : [];
-  const total = progress.length;
-  const completed = progress.filter((entry: any) => entry?.status === "completed").length;
-  const running = progress
-    .filter((entry: any) => entry?.status === "running")
-    .map((entry: any) => {
-      const agent = typeof entry?.agent === "string" && entry.agent ? entry.agent : fallbackAgent;
-      const tool = entry?.currentTool ? `:${entry.currentTool}` : "";
-      return `${agent}${tool}`;
-    })
-    .slice(0, 3);
+function createRoundtableProgressReporter(onUpdate: any, roundtable: any) {
+  const tracker = createRoundtableProgressTracker(roundtable.roster.map((agent: any) => agent.name), {
+    idleTimeoutMs: false,
+  });
+  let latestUpdate: unknown;
+  let lastPublishedAt = 0;
 
-  if (running.length > 0) {
-    return `${running.join(", ")} running${total ? ` (${completed}/${total} done)` : ""}`;
-  }
-  if (total > 0) {
-    return `${completed}/${total} done`;
-  }
-  if (typeof update?.toolCount === "number") {
-    const tool = update.currentTool ? `, ${update.currentTool}` : "";
-    return `${update.toolCount} tools${tool}`;
-  }
-  return "running";
+  const publish = (force = false) => {
+    if (!onUpdate) return;
+    const now = Date.now();
+    if (!force && now - lastPublishedAt < 1_000) return;
+    lastPublishedAt = now;
+    onUpdate({
+      content: [{ type: "text", text: tracker.format(now) }],
+      details: latestUpdate,
+    });
+  };
+
+  const heartbeat = setInterval(() => publish(true), CONSULT_HEARTBEAT_MS);
+  (heartbeat as any).unref?.();
+  publish(true);
+
+  return {
+    update(update: unknown) {
+      const firstUpdate = latestUpdate === undefined;
+      latestUpdate = update;
+      tracker.update(update);
+      publish(firstUpdate);
+    },
+    stop() {
+      clearInterval(heartbeat);
+    },
+  };
 }

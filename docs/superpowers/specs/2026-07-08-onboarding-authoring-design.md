@@ -54,25 +54,25 @@ then run the existing validation commands.
 4. The assistant treats the user as new and asks one question at a time.
 5. The assistant edits `init-data/my-operating-layer.yaml` for the user as
    answers arrive.
-6. The assistant previews the result:
+6. The assistant previews the result with the model-callable tool:
 
    ```text
-   /persona init --plan --from init-data/my-operating-layer.yaml
+   persona_init action=plan source=init-data/my-operating-layer.yaml
    ```
 
 7. The assistant summarizes the plan and asks before applying.
 8. User approves, then the assistant applies the manifest:
 
    ```text
-   /persona init --from init-data/my-operating-layer.yaml
+   persona_init action=apply source=init-data/my-operating-layer.yaml confirmed=true
    ```
 
 9. The assistant completes readiness:
 
    ```text
-   /persona init status --from init-data/my-operating-layer.yaml
+   persona_init apply result: embedded doctor verification
+   persona_init action=status source=init-data/my-operating-layer.yaml
    /persona index --all
-   /persona doctor
    /persona-list
    ```
 
@@ -102,8 +102,11 @@ Permanent documentation that defines the assistant behavior for onboarding:
 - Define what the assistant may infer and what it must not invent.
 - Require the assistant to edit the manifest for the user.
 - Forbid ending draft setup by telling the user to manually review or edit YAML.
-- Require `/persona init --plan` before applying a new manifest.
-- Require `/persona doctor` after applying or editing project files.
+- Require `persona_init` plan before apply and `confirmed: true` only after
+  explicit user approval.
+- Require doctor verification after applying or editing project files; guided
+  `persona_init` apply returns it directly, while manual edits use
+  `/persona doctor`.
 
 This can start as a docs file. It does not need a new runtime module.
 
@@ -118,8 +121,9 @@ Responsibilities:
 - Send a follow-up user message into the Pi session that asks the agent to help
   shape the manifest.
 - Instruct the agent to treat the user as new, ask one question at a time, edit
-  the YAML directly, run `/persona init --plan`, summarize the plan, and ask
-  before applying.
+  the YAML directly, call `persona_init` plan, summarize the plan, ask before
+  applying, pass `confirmed: true` only after approval, and use canonical slash
+  commands rather than `@name` activation examples.
 
 This is the agentic support layer. It is deliberately small: the active Pi
 session owns the interview; the manifest remains the durable working artifact.
@@ -262,7 +266,7 @@ Prefer conservative defaults:
 
 ## Error Handling
 
-- If manifest validation fails, fix the YAML and rerun `/persona init --plan`.
+- If manifest validation fails, fix the YAML and rerun `persona_init` plan.
 - If apply preserves existing files, tell the user which files were preserved and
   edit them directly if changes are needed.
 - If doctor reports missing docs, create the docs or remove stale references.
@@ -280,8 +284,9 @@ Add or maintain focused tests for:
   creating the starter manifest.
 - The draft report says an assisted setup interview is starting and does not say
   "review or edit the YAML" as the user's next responsibility.
-- Manifest draft, plan, apply, and status remain the canonical multi-agent setup
-  path.
+- Manifest draft plus `persona_init` plan, apply, and status remain the canonical
+  assisted multi-agent setup path; equivalent slash commands remain available
+  for direct user control.
 - `/persona new` remains the canonical single-agent setup path.
 - No onboarding path writes `.pi/settings.json` runtime overrides.
 - Doctor remains the only readiness gate for docs, primary generalist state,

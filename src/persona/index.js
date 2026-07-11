@@ -13,7 +13,12 @@ export {
   parsePersonaIndexArgs,
 } from "./doc-index.js";
 export { discoverPersonaProject } from "./agents.js";
-export { assertPersonaRuntimeReady, formatDoctorReport, runDoctor } from "./doctor.js";
+export {
+  assertPersonaRuntimeReady,
+  formatDoctorReport,
+  repairRuntimePackageDuplicates,
+  runDoctor,
+} from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
 export {
   applyPersonaInitFromManifest,
@@ -25,11 +30,15 @@ export {
   statusPersonaInitFromManifest,
 } from "./init-manifest.js";
 export { sendPersonaOutput } from "./pi-output.js";
+export { createConsultProgressTracker, createRoundtableProgressTracker } from "./progress.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export {
+  extractRoundtableAnswer,
+  formatRoundtableBridgeFailure,
+  formatRoundtableBridgeResult,
   formatRoundtableRosterPreview,
   resolveRoundtableLaunchRequest,
-  selectRoundtableRoster,
+  resolveRoundtableSelectionRequest,
 } from "./roundtable.js";
 export { buildScopedSubagentParams, buildScopedSubagentStep } from "./runtime.js";
 export {
@@ -41,5 +50,10 @@ export {
   parsePersonaNewArgs,
   renderAgentScaffold,
 } from "./scaffold.js";
-export { validatePersonaSchema } from "./schema.js";
+export {
+  isDirectPersonaCommandName,
+  isSafeAgentName,
+  validatePersonaFile,
+  validatePersonaSchema,
+} from "./schema.js";
 export { runSubagentBridgeRequest, SUBAGENT_SLASH_EVENTS } from "./subagent-bridge.js";

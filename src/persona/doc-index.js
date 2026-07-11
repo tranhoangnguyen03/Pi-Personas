@@ -1,7 +1,10 @@
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { discoverPersonaProject, resolveWorkspacePath } from "./agents.js";
+import {
+  discoverPersonaProject,
+  resolveWorkspacePathForAccess,
+} from "./agents.js";
 import { uniqueStrings } from "./frontmatter.js";
 
 export const DOC_INDEX_FILE = "_index.md";
@@ -13,7 +16,7 @@ export function isIndexFileName(fileName) {
 }
 
 export async function inspectDocPath(root, docPath) {
-  const resolved = resolveWorkspacePath(root, docPath);
+  const resolved = await resolveWorkspacePathForAccess(root, docPath);
   if (!resolved.ok) {
     return {
       ok: false,
@@ -166,7 +169,10 @@ async function writeDocsIndex(root, docPath) {
     throw new Error(`docs path is not a directory: ${docPath}`);
   }
 
-  const resolved = resolveWorkspacePath(root, docPath);
+  const resolved = await resolveWorkspacePathForAccess(root, docPath);
+  if (!resolved.ok) {
+    throw new Error(`docs path cannot be indexed: ${docPath} (${resolved.reason})`);
+  }
   const indexPath = path.join(resolved.path, DOC_INDEX_FILE);
   const relativeIndexPath = toWorkspacePath(root, indexPath);
   const indexedInspection = withGeneratedIndexFile(inspection, relativeIndexPath);

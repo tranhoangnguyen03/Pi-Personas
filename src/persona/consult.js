@@ -27,6 +27,9 @@ export async function resolveConsultLaunchRequest(root, input) {
   const project = await discoverPersonaProject(root);
   const requester = findAgent(project, input.requester, "requester");
   const consultant = findAgent(project, input.consultant, "consultant");
+  if (requester.name === consultant.name) {
+    throw new Error("consultant must be a different persona from requester");
+  }
 
   const consultantScope = await resolveAgentScope(root, consultant.name);
   const envelope = buildConsultEnvelope({

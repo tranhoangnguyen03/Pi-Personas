@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,7 +6,6 @@ import {
   discoverPersonaProject,
   formatPrimaryGeneralistError,
   getPrimaryGeneralistState,
-  pathExists,
   resolveWorkspacePath,
 } from "./agents.js";
 import { inspectDocPath } from "./doc-index.js";
@@ -19,19 +18,20 @@ const RUNTIME_PACKAGES = {
     path: "npm/node_modules/pi-subagents",
     missing: "pi-subagents missing; consults and round-tables are unavailable",
   },
-  piIntercom: {
-    name: "pi-intercom",
-    source: "npm:pi-intercom",
-    path: "npm/node_modules/pi-intercom",
-    missing: "pi-intercom missing; native child result delivery may be unavailable",
-  },
 };
 
 export async function runDoctor(root, options = {}) {
+  const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
   const project = await discoverPersonaProject(root);
   const dependencyStatus = options.dependencyStatus ?? await detectDependencies(root);
   const issues = [];
 
+  if (repairs.length > 0) {
+    issues.push({
+      severity: "warning",
+      message: "duplicate pi-subagents configuration was repaired; reload Pi before running consults or round-tables",
+    });
+  }
   collectDependencyIssues(dependencyStatus, issues);
   collectParseIssues(project, issues);
   issues.push(...validatePersonaSchema(project));
@@ -53,10 +53,15 @@ export async function runDoctor(root, options = {}) {
     dependencies: dependencyStatus,
     project,
     issues,
+    repairs,
   };
 }
 
 export async function assertPersonaRuntimeReady(root, options = {}) {
+  const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
+  if (repairs.length > 0) {
+    throw new Error("Pi Persona repaired duplicate pi-subagents configuration. Reload Pi, then retry.");
+  }
   const dependencyStatus = options.dependencyStatus ?? await detectDependencies(root);
   const problems = runtimeDependencyProblems(dependencyStatus);
   if (problems.length === 0) return dependencyStatus;
@@ -69,7 +74,6 @@ export async function assertPersonaRuntimeReady(root, options = {}) {
     "",
     "Install/configure with:",
     `pi install ${RUNTIME_PACKAGES.piSubagents.source}`,
-    `pi install ${RUNTIME_PACKAGES.piIntercom.source}`,
     "",
     "Then restart Pi and run /persona doctor.",
   ].join("\n"));
@@ -83,7 +87,6 @@ export function formatDoctorReport(result) {
     "",
     "## Dependencies",
     dependencyLine("pi-subagents", result.dependencies.piSubagents),
-    dependencyLine("pi-intercom", result.dependencies.piIntercom),
     "",
     "## Project",
     `Agents: ${result.project.agents.length} launchable`,
@@ -108,7 +111,38 @@ export function formatDoctorReport(result) {
     }
   }
 
+  if (result.repairs?.length > 0) {
+    lines.push("", "## Repairs");
+    for (const repair of result.repairs) {
+      lines.push(`- kept ${repair.kept}; removed ${repair.removed.length} duplicate declaration(s)`);
+    }
+    lines.push("- reload Pi to unload the duplicate runtime copy");
+  }
+
   return lines.join("\n");
+}
+
+export async function repairRuntimePackageDuplicates(root, options = {}) {
+  const agentDir = options.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi/agent");
+  const settings = [
+    await readSettings(path.join(agentDir, "settings.json"), "global"),
+    await readSettings(path.join(root, ".pi/settings.json"), "project"),
+  ].filter(Boolean);
+  const global = settings.find((entry) => entry.scope === "global");
+  const project = settings.find((entry) => entry.scope === "project" && entry.path !== global?.path);
+  const globalPackages = runtimePackages(global?.value.packages);
+  const projectPackages = runtimePackages(project?.value.packages);
+  const repairs = [];
+
+  if (globalPackages.length > 0) {
+    const kept = globalPackages.find((entry) => entry === RUNTIME_PACKAGES.piSubagents.source) ?? globalPackages[0];
+    await repairSettingsRuntimePackages(global, kept, repairs);
+    await repairSettingsRuntimePackages(project, undefined, repairs, kept);
+  } else if (projectPackages.length > 1) {
+    await repairSettingsRuntimePackages(project, projectPackages[0], repairs);
+  }
+
+  return repairs;
 }
 
 async function detectDependencies(root) {
@@ -116,7 +150,6 @@ async function detectDependencies(root) {
   const configuredPackages = await detectConfiguredPackages(agentDir, root);
   return {
     piSubagents: await detectPackage(agentDir, configuredPackages, RUNTIME_PACKAGES.piSubagents),
-    piIntercom: await detectPackage(agentDir, configuredPackages, RUNTIME_PACKAGES.piIntercom),
   };
 }
 
@@ -161,6 +194,56 @@ async function readSettingsPackages(settingsPath) {
   }
 }
 
+async function readSettings(settingsPath, scope) {
+  try {
+    const value = JSON.parse(await readFile(settingsPath, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    return { path: settingsPath, scope, value };
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimePackages(packages) {
+  return Array.isArray(packages) ? packages.filter(isPiSubagentsPackage) : [];
+}
+
+function isPiSubagentsPackage(entry) {
+  return typeof entry === "string" && /(?:^|[/@:])pi-subagents(?:@[^/]+|\.git)?(?:$|[/#?])/.test(entry);
+}
+
+async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalKept = kept) {
+  if (!settings || !Array.isArray(settings.value.packages)) return;
+  const configured = runtimePackages(settings.value.packages);
+  const keptIndex = kept ? configured.indexOf(kept) : -1;
+  const removed = configured.filter((_entry, index) => index !== keptIndex);
+  if (removed.length === 0) return;
+
+  let inserted = false;
+  const packages = [];
+  for (const entry of settings.value.packages) {
+    if (!isPiSubagentsPackage(entry)) {
+      packages.push(entry);
+    } else if (!inserted && kept) {
+      packages.push(kept);
+      inserted = true;
+    }
+  }
+
+  const backupPath = `${settings.path}.pi-personas.bak`;
+  const temporaryPath = `${settings.path}.${process.pid}.tmp`;
+  await copyFile(settings.path, backupPath);
+  await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, "utf8");
+  await rename(temporaryPath, settings.path);
+  repairs.push({
+    scope: settings.scope,
+    settingsPath: settings.path,
+    backupPath,
+    kept: canonicalKept,
+    removed,
+  });
+}
+
 function dependencyLine(name, dependency) {
   if (dependency?.ok) {
     const configured = dependency.configured === true
@@ -175,7 +258,6 @@ function dependencyLine(name, dependency) {
 
 function collectDependencyIssues(dependencies, issues) {
   collectRuntimePackageIssue(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents, issues);
-  collectRuntimePackageIssue(dependencies.piIntercom, RUNTIME_PACKAGES.piIntercom, issues);
 }
 
 function collectRuntimePackageIssue(dependency, spec, issues) {
@@ -196,7 +278,6 @@ function collectRuntimePackageIssue(dependency, spec, issues) {
 function runtimeDependencyProblems(dependencies) {
   return [
     runtimeDependencyProblem(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents),
-    runtimeDependencyProblem(dependencies.piIntercom, RUNTIME_PACKAGES.piIntercom),
   ].filter(Boolean);
 }
 
@@ -266,16 +347,18 @@ async function collectDocsIssues(project, issues) {
       });
       continue;
     }
-    if (!await pathExists(project.root, entry.docPath)) {
+    const inspection = await inspectDocPath(project.root, entry.docPath);
+    if (!inspection.ok) {
       issues.push({
         severity: "error",
         file: entry.owner,
-        message: `${entry.owner}: docs path does not exist: ${entry.docPath}`,
+        message: inspection.reason === "missing"
+          ? `${entry.owner}: docs path does not exist: ${entry.docPath}`
+          : `${entry.owner}: docs path must stay inside workspace: ${entry.docPath} (${inspection.reason})`,
       });
       continue;
     }
 
-    const inspection = await inspectDocPath(project.root, entry.docPath);
     if (inspection.type === "directory" && inspection.deferred.length > 0 && !inspection.indexFile) {
       issues.push({
         severity: "warning",

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,9 +12,12 @@ import {
   createDocsIndex,
   createPersonaInitDraft,
   createPersonaProjectScaffold,
+  createConsultProgressTracker,
+  createRoundtableProgressTracker,
   discoverPersonaProject,
   createAgentScaffold,
   extractConsultAnswer,
+  extractRoundtableAnswer,
   formatAgentScaffoldCreatedMessage,
   formatConsultBridgeResult,
   formatConsultProvenance,
@@ -23,6 +26,7 @@ import {
   formatPersonaList,
   formatDoctorReport,
   formatPersonaInitDraftAuthoringPrompt,
+  formatRoundtableBridgeFailure,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
@@ -38,9 +42,11 @@ import {
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
+  resolveRoundtableSelectionRequest,
   assertPersonaRuntimeReady,
   runSubagentBridgeRequest,
   runDoctor,
+  repairRuntimePackageDuplicates,
   sendPersonaOutput,
 } from "../src/persona/index.js";
 
@@ -125,6 +131,101 @@ function createEventBus(onRequest) {
         handler(data);
       }
     },
+    listenerCount(event) {
+      return (handlers.get(event) ?? []).length;
+    },
+  };
+}
+
+async function createCommandWorkspace(extraAgent) {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-command-"));
+  await writeText(path.join(root, ".pi/agents/generalist.md"), `---
+name: generalist
+role: generalist
+primary: true
+description: Generalist.
+---
+Generalist prompt.
+`);
+
+  if (extraAgent) {
+    await writeText(path.join(root, `.pi/agents/${extraAgent}.md`), `---
+name: ${extraAgent}
+role: specialist
+description: ${extraAgent} specialist.
+---
+${extraAgent} prompt.
+`);
+  }
+
+  return root;
+}
+
+async function createExtensionHarness(cwd, options = {}) {
+  const { default: registerPiPersona } = await import("../extensions/pi-persona.ts");
+  const commands = new Map();
+  const tools = new Map();
+  const handlers = new Map();
+  const entries = [];
+  const messages = [];
+  const notifications = [];
+  const statuses = [];
+  const sentUserMessages = [];
+  const events = createEventBus(options.onSubagentRequest);
+  const pi = {
+    registerTool(spec) {
+      tools.set(spec.name, spec);
+    },
+    registerCommand(name, spec) {
+      commands.set(name, spec);
+    },
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    appendEntry(customType, data) {
+      entries.push({ type: "custom", customType, data });
+    },
+    sendMessage(message) {
+      messages.push(message);
+    },
+    sendUserMessage(message, options) {
+      sentUserMessages.push({ message, options });
+    },
+    events,
+  };
+  const ctx = {
+    cwd,
+    ui: {
+      notify(message, level) {
+        notifications.push({ message, level });
+      },
+      setStatus(key, value) {
+        statuses.push({ key, value });
+      },
+    },
+    sessionManager: {
+      getBranch() {
+        return entries;
+      },
+    },
+    isIdle() {
+      return true;
+    },
+  };
+
+  registerPiPersona(pi);
+
+  return {
+    commands,
+    tools,
+    handlers,
+    entries,
+    messages,
+    notifications,
+    statuses,
+    sentUserMessages,
+    events,
+    ctx,
   };
 }
 
@@ -198,6 +299,9 @@ test("package tarball excludes local runtime state and tests", async () => {
   ));
 
   assert.ok(files.includes("README.md"));
+  assert.ok(files.includes("LICENSE"));
+  assert.ok(files.includes("CHANGELOG.md"));
+  assert.ok(files.includes("RELEASING.md"));
   assert.ok(files.includes("extensions/pi-persona.ts"));
   assert.ok(files.includes("src/persona/index.js"));
   assert.deepEqual(forbidden, []);
@@ -206,10 +310,11 @@ test("package tarball excludes local runtime state and tests", async () => {
 test("runtime Pi packages are optional peers for plain npm installs", async () => {
   const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
 
-  assert.equal(manifest.peerDependencies["pi-intercom"], ">=0.6.0");
-  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.31.0");
-  assert.equal(manifest.peerDependenciesMeta["pi-intercom"].optional, true);
+  assert.equal(manifest.peerDependencies["pi-intercom"], undefined);
+  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.34.0");
   assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
+  assert.equal(manifest.license, "MIT");
+  assert.equal(manifest.publishConfig.access, "public");
 });
 
 test("README maintainer doc links point to checked-in files", async () => {
@@ -240,6 +345,8 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /createPersonaInitDraft/);
   assert.match(source, /formatPersonaInitDraftAuthoringPrompt/);
   assert.match(source, /createDocsIndex/);
+  assert.match(source, /name:\s*"persona_init"/);
+  assert.match(source, /\/persona use <name>/);
 });
 
 test("extension starts agentic authoring after persona init draft", async () => {
@@ -256,6 +363,42 @@ test("extension starts agentic authoring after persona init draft", async () => 
   assert.doesNotMatch(draftBlock, /Review or edit the YAML/);
 });
 
+test("extension exposes model-callable manifest planning and confirmation-gated apply", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-init-tool-"));
+  const draft = await createPersonaInitDraft(root, "init-data/setup.yaml");
+  const harness = await createExtensionHarness(root);
+  const tool = harness.tools.get("persona_init");
+
+  assert.ok(tool);
+  const plan = await tool.execute("plan", {
+    action: "plan",
+    source: draft.source,
+  }, undefined, undefined, harness.ctx);
+  assert.equal(plan.details.mode, "plan");
+  assert.match(plan.content[0].text, /Pi Persona Init Plan/);
+
+  const unconfirmed = await tool.execute("apply", {
+    action: "apply",
+    source: draft.source,
+  }, undefined, undefined, harness.ctx);
+  assert.equal(unconfirmed.isError, true);
+  assert.match(unconfirmed.content[0].text, /requires confirmed: true/);
+
+  const applied = await tool.execute("apply", {
+    action: "apply",
+    source: draft.source,
+    confirmed: true,
+  }, undefined, undefined, harness.ctx);
+  assert.notEqual(applied.isError, true);
+  assert.match(applied.content[0].text, /Pi Persona Init Applied/);
+  assert.match(applied.content[0].text, /Pi Persona Doctor/);
+  assert.ok(["pass", "warning"].includes(applied.details.doctor.status));
+  assert.deepEqual((await discoverPersonaProject(root)).agents.map((agent) => agent.name), [
+    "example-specialist",
+    "generalist",
+  ]);
+});
+
 test("extension registers the persona_consult tool", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
   const consultToolBlock = source.slice(
@@ -265,19 +408,70 @@ test("extension registers the persona_consult tool", async () => {
 
   assert.match(source, /registerTool\(/);
   assert.match(source, /name:\s*"persona_consult"/);
+  assert.match(consultToolBlock, /label:\s*"pi-persona"/);
   assert.match(source, /resolveConsultLaunchRequest/);
   assert.match(source, /extractConsultAnswer/);
   assert.match(source, /formatConsultBridgeResult/);
   assert.match(consultToolBlock, /runSubagentBridgeRequest/);
   assert.match(consultToolBlock, /extractConsultAnswer/);
   assert.match(consultToolBlock, /assertPersonaRuntimeReady/);
+  assert.match(consultToolBlock, /createConsultProgressReporter/);
+  assert.match(consultToolBlock, /renderCall/);
+  assert.match(consultToolBlock, /renderResult/);
+  assert.match(consultToolBlock, /keyHint\("app\.tools\.expand", "to expand"\)/);
+  assert.doesNotMatch(consultToolBlock, /setStatus/);
   assert.doesNotMatch(consultToolBlock, /formatConsultSubagentInstructions/);
+});
+
+test("persona consult panel discloses query and context mode", async () => {
+  const root = await createCommandWorkspace("researcher");
+  const harness = await createExtensionHarness(root);
+  const tool = harness.tools.get("persona_consult");
+  const theme = {
+    bold(value) { return value; },
+    fg(_color, value) { return value; },
+  };
+  const args = {
+    requester: "analyst",
+    consultant: "researcher",
+    question: "Find and verify Gemma 4 fine-tuning implementations.",
+    summary: "The user needs practical recipes.",
+    constraints: "Prefer primary sources.",
+    expectedOutput: "A concise table.",
+    context: "fork",
+  };
+
+  const expanded = tool.renderCall(args, theme, { expanded: true })
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.match(expanded, /Consulting researcher/);
+  assert.match(expanded, /Query: Find and verify Gemma 4 fine-tuning implementations\./);
+  assert.match(expanded, /Context: fork · current conversation branch inherited/);
+  assert.match(expanded, /Requester: analyst/);
+  assert.match(expanded, /Summary:\nThe user needs practical recipes\./);
+  assert.match(expanded, /Constraints:\nPrefer primary sources\./);
+  assert.match(expanded, /Expected output:\nA concise table\./);
+
+  const fresh = tool.renderCall({ ...args, context: "fresh" }, theme, { expanded: true })
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.match(fresh, /Context: fresh · conversation history not included/);
+
+  const partial = tool.renderResult({
+    content: [{ type: "text", text: "[pi-persona] Consulting researcher\n\n4:12 elapsed · 10 tools" }],
+  }, { expanded: false, isPartial: true }, theme)
+    .render(160)
+    .map((line) => line.trimEnd())
+    .join("\n");
+  assert.equal(partial, "4:12 elapsed · 10 tools");
 });
 
 test("extension direct persona commands activate the current chat instead of the subagent bridge", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
   const commandBlock = source.slice(
-    source.indexOf("const registerPersonaCommand"),
+    source.indexOf("const activatePersona"),
     source.indexOf("const registerProjectCommands"),
   );
 
@@ -287,6 +481,38 @@ test("extension direct persona commands activate the current chat instead of the
   assert.match(source, /before_agent_start/);
   assert.match(source, /\/persona status/);
   assert.match(source, /\/persona clear/);
+});
+
+test("canonical persona use launches names that cannot own direct aliases", async () => {
+  const root = await createCommandWorkspace("persona");
+  const harness = await createExtensionHarness(root);
+
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  await harness.commands.get("persona").handler("use persona review this", harness.ctx);
+
+  assert.equal(harness.entries.at(-1).data.agentName, "persona");
+  assert.equal(harness.sentUserMessages.at(-1).message, "review this");
+});
+
+test("persona consult requires and matches the active requester", async () => {
+  const root = await createCommandWorkspace("brand");
+  const harness = await createExtensionHarness(root);
+  const tool = harness.tools.get("persona_consult");
+  const params = {
+    requester: "brand",
+    consultant: "generalist",
+    question: "Review this.",
+    summary: "Focused context.",
+  };
+
+  const inactive = await tool.execute("consult", params, undefined, undefined, harness.ctx);
+  assert.equal(inactive.isError, true);
+  assert.match(inactive.content[0].text, /requires an active persona/);
+
+  await harness.commands.get("generalist").handler("", harness.ctx);
+  const mismatch = await tool.execute("consult", params, undefined, undefined, harness.ctx);
+  assert.equal(mismatch.isError, true);
+  assert.match(mismatch.content[0].text, /requester must match active persona 'generalist'/);
 });
 
 test("extension bootstraps /generalist before project agents exist", async () => {
@@ -300,16 +526,56 @@ test("extension bootstraps /generalist before project agents exist", async () =>
   assert.match(source, /No Pi Persona `\/generalist` agent found/);
 });
 
-test("extension registers persona-roundtable as a namespaced command", async () => {
+test("extension rejects stale direct persona commands in the current workspace", async () => {
+  const workspaceA = await createCommandWorkspace("brand");
+  const workspaceB = await createCommandWorkspace();
+  const harness = await createExtensionHarness(workspaceA);
+
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  assert.ok(harness.commands.has("brand"));
+
+  harness.ctx.cwd = workspaceB;
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  await harness.commands.get("brand").handler("", harness.ctx);
+
+  assert.match(
+    harness.messages.at(-1).content,
+    /\/brand is not available in this workspace\. Run \/persona-list\./,
+  );
+  assert.ok(!harness.entries.some((entry) => entry.data?.agentName === "brand"));
+});
+
+test("extension clears restored active persona state when it is unavailable", async () => {
+  const workspaceA = await createCommandWorkspace("ops");
+  const workspaceB = await createCommandWorkspace();
+  const harness = await createExtensionHarness(workspaceA);
+
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  await harness.commands.get("ops").handler("", harness.ctx);
+  assert.ok(harness.entries.some((entry) => entry.data?.agentName === "ops"));
+
+  harness.ctx.cwd = workspaceB;
+  const result = await harness.handlers.get("before_agent_start")(
+    { systemPrompt: "base prompt" },
+    harness.ctx,
+  );
+
+  assert.equal(harness.entries.at(-1).data.agentName, null);
+  assert.match(result.systemPrompt, /Previously active persona \/ops is not available in this workspace/);
+  assert.equal(harness.statuses.at(-1).value, undefined);
+});
+
+test("extension registers persona-roundtable as a namespaced command and model-callable tool", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
 
   assert.match(source, /registerCommand\("persona-roundtable"/);
   assert.doesNotMatch(source, /registerCommand\("roundtable"/);
-  assert.match(source, /createRoundtableProgress/);
+  assert.match(source, /name:\s*"persona_roundtable"/);
+  assert.match(source, /createRoundtableProgressReporter/);
   assert.match(source, /onUpdate/);
-  assert.match(source, /statusKey:\s*"pi-persona-roundtable"/);
-  assert.match(source, /setStatus(?:\?\.)?\(options\.statusKey/);
   assert.match(source, /assertPersonaRuntimeReady/);
+  assert.match(source, /resolveRoundtableSelectionRequest/);
+  assert.match(source, /extractRoundtableAnswer/);
 });
 
 test("extension preflights runtime dependencies before bridge execution", async () => {
@@ -318,15 +584,131 @@ test("extension preflights runtime dependencies before bridge execution", async 
     source.indexOf('name: "persona_consult"'),
     source.indexOf("const registerPersonaCommand"),
   );
-  const roundtableBlock = source.slice(
+  const roundtableToolBlock = source.slice(
+    source.indexOf('name: "persona_roundtable"'),
+    source.indexOf("const activatePersona"),
+  );
+  const roundtableCommandBlock = source.slice(
     source.indexOf('pi.registerCommand("persona-roundtable"'),
-    source.indexOf("function isSafeCommandName"),
+    source.indexOf("function normalizeCommandText"),
   );
 
   assert.ok(consultToolBlock.indexOf("assertPersonaRuntimeReady") >= 0);
-  assert.ok(roundtableBlock.indexOf("assertPersonaRuntimeReady") >= 0);
+  assert.ok(roundtableToolBlock.indexOf("assertPersonaRuntimeReady") >= 0);
   assert.ok(consultToolBlock.indexOf("assertPersonaRuntimeReady") < consultToolBlock.indexOf("runSubagentBridgeRequest"));
-  assert.ok(roundtableBlock.indexOf("assertPersonaRuntimeReady") < roundtableBlock.indexOf("runSubagentBridgeRequest"));
+  assert.ok(roundtableToolBlock.indexOf("assertPersonaRuntimeReady") < roundtableToolBlock.indexOf("runSubagentBridgeRequest"));
+  assert.equal(roundtableToolBlock.match(/runSubagentBridgeRequest/g)?.length, 1);
+  assert.doesNotMatch(roundtableCommandBlock, /runSubagentBridgeRequest/);
+});
+
+test("roundtable command delegates selection to the primary generalist and the tool emits one bridge request", async () => {
+  const root = await createWorkspace();
+  const requests = [];
+  const progressUpdates = [];
+  const harness = await createExtensionHarness(root, {
+    onSubagentRequest(request, events) {
+      requests.push(request);
+      events.emit("subagent:slash:started", { requestId: request.requestId });
+      events.emit("subagent:slash:update", {
+        requestId: request.requestId,
+        progress: [
+          {
+            index: 0,
+            agent: "brand",
+            status: "running",
+            currentTool: "search_web",
+            currentToolArgs: "Gemma OCR benchmarks",
+            recentTools: [],
+            toolCount: 3,
+            turnCount: 2,
+            tokens: 1200,
+          },
+          {
+            index: 1,
+            agent: "guideline",
+            status: "completed",
+            recentTools: [],
+            toolCount: 2,
+            turnCount: 1,
+            tokens: 800,
+          },
+        ],
+      });
+      events.emit("subagent:slash:response", {
+        requestId: request.requestId,
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Delivered chain subagent results via intercom.\nFull grouped output was sent over intercom." }],
+          details: {
+            mode: "chain",
+            results: [
+              { agent: "brand", exitCode: 0, finalOutput: "Brand position" },
+              { agent: "guideline", exitCode: 0, finalOutput: "Guideline position" },
+              { agent: "generalist", exitCode: 0, finalOutput: "Choose the model that wins on your representative OCR set." },
+            ],
+          },
+        },
+      });
+    },
+  });
+
+  await harness.commands.get("persona-roundtable").handler("Compare Gemma models", harness.ctx);
+
+  assert.equal(harness.entries.at(-1).data.agentName, "generalist");
+  assert.match(harness.sentUserMessages.at(-1).message, /Compare Gemma models/);
+  assert.match(harness.sentUserMessages.at(-1).message, /Call `persona_roundtable` exactly once/);
+  assert.equal(requests.length, 0);
+
+  const tool = harness.tools.get("persona_roundtable");
+  const mismatch = await tool.execute(
+    "roundtable-mismatch",
+    {
+      query: "A different query",
+      selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
+    },
+    undefined,
+    undefined,
+    harness.ctx,
+  );
+  assert.equal(mismatch.isError, true);
+  assert.match(mismatch.content[0].text, /query must match.*unchanged/);
+  assert.equal(requests.length, 0);
+
+  const result = await tool.execute(
+    "roundtable",
+    {
+      query: "Compare Gemma models",
+      selections: [
+        { name: "brand", reason: "Compare positioning trade-offs." },
+        { name: "guideline", reason: "Check evidence quality." },
+      ],
+    },
+    undefined,
+    (update) => progressUpdates.push(update),
+    harness.ctx,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].params.chain.map((step) => step.phase), ["Round 1", "Round 2", "Synthesis"]);
+  assert.match(progressUpdates.at(-1).content[0].text, /Round 1/);
+  assert.match(progressUpdates.at(-1).content[0].text, /5 tools/);
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0].text, /Choose the model that wins/);
+  assert.doesNotMatch(result.content[0].text, /Delivered chain subagent results via intercom/);
+
+  const repeated = await tool.execute(
+    "roundtable-repeat",
+    {
+      query: "Compare Gemma models",
+      selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
+    },
+    undefined,
+    undefined,
+    harness.ctx,
+  );
+  assert.equal(repeated.isError, true);
+  assert.match(repeated.content[0].text, /requires a pending \/persona-roundtable request/);
+  assert.equal(requests.length, 1);
 });
 
 test("extension stores active persona state for direct persona mode", async () => {
@@ -394,9 +776,13 @@ test("docs document active persona footer and global subagent list behavior", as
   assert.match(docs, /bootstrap command/);
   assert.match(docs, /falling through as ordinary prompt text/);
   assert.match(docs, /pi install npm:pi-subagents/);
+  assert.doesNotMatch(docs, /pi install npm:pi-intercom/);
   assert.match(docs, /runtime preflight/);
   assert.match(docs, /PI_SUBAGENT_CHILD/);
   assert.match(docs, /leaf task/);
+  assert.match(docs, /\/persona use <name>/);
+  assert.match(docs, /schema-validated selection/);
+  assert.match(docs, /no extension-owned telemetry/i);
   assert.doesNotMatch(docs, /child supervisor/);
   assert.doesNotMatch(docs, /blocked children/);
 });
@@ -558,16 +944,12 @@ Brand prompt.
   assert.ok(result.issues.some((issue) => issue.message.includes(".pi/skills/workstreams/empty/")));
 });
 
-test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () => {
+test("doctor detects the default pi-subagents dependency from PI_CODING_AGENT_DIR", async () => {
   const root = await createWorkspace();
   const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
   await writeText(
     path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
     `${JSON.stringify({ version: "9.9.1" })}\n`,
-  );
-  await writeText(
-    path.join(agentDir, "npm/node_modules/pi-intercom/package.json"),
-    `${JSON.stringify({ version: "9.9.2" })}\n`,
   );
 
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -575,7 +957,6 @@ test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () =>
   try {
     const result = await runDoctor(root);
     assert.equal(result.dependencies.piSubagents.version, "9.9.1");
-    assert.equal(result.dependencies.piIntercom.version, "9.9.2");
   } finally {
     if (originalAgentDir === undefined) {
       delete process.env.PI_CODING_AGENT_DIR;
@@ -585,28 +966,21 @@ test("doctor detects default dependencies from PI_CODING_AGENT_DIR", async () =>
   }
 });
 
-test("doctor detects runtime package configuration from user and project settings", async () => {
+test("doctor detects runtime package configuration from user settings", async () => {
   const root = await createWorkspace();
   const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
   await writeText(
     path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
     `${JSON.stringify({ version: "9.9.1" })}\n`,
   );
-  await writeText(
-    path.join(agentDir, "npm/node_modules/pi-intercom/package.json"),
-    `${JSON.stringify({ version: "9.9.2" })}\n`,
-  );
   await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
-  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({ packages: ["npm:pi-intercom"] })}\n`);
 
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     const result = await runDoctor(root);
     assert.equal(result.dependencies.piSubagents.configured, true);
-    assert.equal(result.dependencies.piIntercom.configured, true);
     assert.match(formatDoctorReport(result), /pi-subagents: 9\.9\.1 at .*configured/);
-    assert.match(formatDoctorReport(result), /pi-intercom: 9\.9\.2 at .*configured/);
   } finally {
     if (originalAgentDir === undefined) {
       delete process.env.PI_CODING_AGENT_DIR;
@@ -616,7 +990,84 @@ test("doctor detects runtime package configuration from user and project setting
   }
 });
 
-test("doctor warns but keeps direct mode available when child runtime packages are missing", async () => {
+test("runtime duplicate repair keeps one global pi-subagents package and preserves settings", async () => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  const globalSettings = path.join(agentDir, "settings.json");
+  const projectSettings = path.join(root, ".pi/settings.json");
+  await writeText(globalSettings, `${JSON.stringify({
+    theme: "dark",
+    packages: ["npm:pi-subagents", "npm:other", "npm:pi-subagents"],
+  }, null, 2)}\n`);
+  await writeText(projectSettings, `${JSON.stringify({
+    packages: ["file:/workspace/pi-personas", "npm:pi-subagents"],
+    projectSetting: true,
+  }, null, 2)}\n`);
+
+  const repairs = await repairRuntimePackageDuplicates(root, { agentDir });
+
+  assert.equal(repairs.length, 2);
+  assert.deepEqual((await readJson(globalSettings)).packages, ["npm:pi-subagents", "npm:other"]);
+  assert.deepEqual((await readJson(projectSettings)).packages, ["file:/workspace/pi-personas"]);
+  assert.equal((await readJson(projectSettings)).projectSetting, true);
+  assert.deepEqual((await readJson(`${projectSettings}.pi-personas.bak`)).packages, [
+    "file:/workspace/pi-personas",
+    "npm:pi-subagents",
+  ]);
+  assert.deepEqual(await repairRuntimePackageDuplicates(root, { agentDir }), []);
+});
+
+test("runtime preflight repairs duplicates before a consult can launch", async () => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "9.9.1" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await assert.rejects(() => assertPersonaRuntimeReady(root), /repaired duplicate pi-subagents configuration.*Reload Pi/);
+    await assert.doesNotReject(() => assertPersonaRuntimeReady(root));
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("consult progress reports observable activity and idle countdown", () => {
+  const tracker = createConsultProgressTracker("researcher", { startedAt: 0, idleTimeoutMs: 180_000 });
+  tracker.update({
+    progress: [{
+      agent: "researcher",
+      status: "running",
+      currentTool: "read_webpage",
+      currentToolArgs: "https://example.com/a very long page",
+      recentTools: [
+        { tool: "search_web", args: "gemma", endMs: 1 },
+        { tool: "read_webpage", args: "https://example.com", endMs: 2 },
+        { tool: "read_github_file", args: "owner/repo/config.yaml", endMs: 3 },
+      ],
+      toolCount: 3,
+      turnCount: 2,
+      tokens: 1_500,
+      failedTool: "read_webpage",
+      lastActivityAt: 10_000,
+    }],
+  }, 10_000);
+
+  const text = tracker.format(130_000);
+  assert.match(text, /\[pi-persona\] Consulting researcher/);
+  assert.match(text, /2:10 elapsed · active 2:00 ago · 3 tools · 2 sources · 1 recoverable errors · 2 turns · 1\.5k tokens/);
+  assert.match(text, /Now: read_webpage · https:\/\/example\.com/);
+  assert.match(text, /1 searches · 1 webpages · 1 repository/);
+  assert.match(text, /cancelling in 1:00 unless activity resumes/);
+});
+
+test("doctor warns but keeps direct mode available when pi-subagents is missing", async () => {
   const root = await createWorkspace();
 
   const result = await runDoctor(root, {
@@ -628,7 +1079,6 @@ test("doctor warns but keeps direct mode available when child runtime packages a
 
   assert.equal(result.status, "warning");
   assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-subagents missing; consults and round-tables are unavailable")));
-  assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-intercom missing; native child result delivery may be unavailable")));
 });
 
 test("doctor warns when runtime packages are installed but not configured", async () => {
@@ -644,7 +1094,6 @@ test("doctor warns when runtime packages are installed but not configured", asyn
   assert.equal(result.status, "warning");
   assert.match(formatDoctorReport(result), /pi-subagents: 0\.33\.1 at \/tmp\/pi-subagents \(not configured in Pi settings\)/);
   assert.ok(result.issues.some((issue) => issue.message.includes("pi-subagents installed but not configured in Pi settings; run `pi install npm:pi-subagents`")));
-  assert.ok(result.issues.some((issue) => issue.message.includes("pi-intercom installed but not configured in Pi settings; run `pi install npm:pi-intercom`")));
 });
 
 test("runtime dependency preflight returns install and configuration guidance", async () => {
@@ -659,8 +1108,7 @@ test("runtime dependency preflight returns install and configuration guidance", 
       assert.match(error.message, /Pi Persona consults and round-tables require runtime packages/);
       assert.match(error.message, /pi-subagents is installed but not configured/);
       assert.match(error.message, /pi install npm:pi-subagents/);
-      assert.match(error.message, /pi-intercom is missing/);
-      assert.match(error.message, /pi install npm:pi-intercom/);
+      assert.doesNotMatch(error.message, /pi-intercom/);
       return true;
     },
   );
@@ -1075,6 +1523,64 @@ Escape prompt.
   assert.ok(result.issues.some((issue) => issue.message.includes("docs path must stay inside workspace")));
 });
 
+test("filesystem operations reject workspace symlink escapes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-symlink-root-"));
+  const outside = await mkdtemp(path.join(tmpdir(), "pi-persona-symlink-outside-"));
+  await symlink(outside, path.join(root, "init-data"));
+
+  await assert.rejects(
+    () => createPersonaInitDraft(root, "init-data/escaped.yaml"),
+    /draft path must stay inside workspace/,
+  );
+  await assert.rejects(
+    () => readFile(path.join(outside, "escaped.yaml"), "utf8"),
+    /ENOENT/,
+  );
+
+  const agentRoot = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-outside-"));
+  const linkedProject = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-root-"));
+  await mkdir(path.join(agentRoot, "agents"), { recursive: true });
+  await symlink(agentRoot, path.join(linkedProject, ".pi"));
+  await assert.rejects(
+    () => discoverPersonaProject(linkedProject),
+    /persona agent path must stay inside workspace.*symlink-escape/,
+  );
+});
+
+test("doctor reports raw frontmatter types and excludes invalid agents from launch", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, ".pi/agents/invalid.md"), `---
+name: 123
+role: specialist
+description:
+  team: brand
+model:
+  provider: example
+docs:
+  - docs/shared/
+  - 42
+skills:
+  name: review
+---
+Invalid prompt.
+`);
+
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, configured: true, version: "0.34.0", path: "/tmp/pi-subagents" },
+    },
+  });
+  const messages = result.issues.map((issue) => issue.message);
+
+  assert.equal(result.status, "error");
+  assert.ok(!result.project.agents.some((agent) => agent.fileName === "invalid.md"));
+  assert.ok(messages.some((message) => message.includes("name must be a non-empty string")));
+  assert.ok(messages.some((message) => message.includes("description must be a non-empty string")));
+  assert.ok(messages.some((message) => message.includes("model must be a non-empty string")));
+  assert.ok(messages.some((message) => message.includes("docs[1] must be a non-empty string")));
+  assert.ok(messages.some((message) => message.includes("skills must be a string or an array")));
+});
+
 test("frontmatter parser supports YAML arrays and quoted colon values", () => {
   const parsed = parseFrontmatterDocument(`---
 name: yaml-agent
@@ -1096,6 +1602,7 @@ Prompt body.
 `, ".pi/agents/yaml-agent.md");
 
   assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.rawFrontmatter.docs, ["docs/shared/", "docs/workstreams/brand/"]);
   assert.equal(parsed.frontmatter.description, "Handles values with: colons");
   assert.deepEqual(parsed.frontmatter.tools, ["read", "write"]);
   assert.deepEqual(parsed.frontmatter.docs, ["docs/shared/", "docs/workstreams/brand/"]);
@@ -1254,6 +1761,20 @@ test("resolveConsultLaunchRequest allows consulting any known persona by roster"
   assert.equal(consult.requester.name, "guideline");
   assert.equal(consult.consultant.name, "brand");
   assert.equal(consult.subagentParams.agent, "brand");
+});
+
+test("resolveConsultLaunchRequest rejects self-consults", async () => {
+  const root = await createWorkspace();
+
+  await assert.rejects(
+    () => resolveConsultLaunchRequest(root, {
+      requester: "brand",
+      consultant: "brand",
+      question: "Can I ask myself?",
+      summary: "Brand is attempting a redundant self-consult.",
+    }),
+    /consultant must be a different persona from requester/,
+  );
 });
 
 test("resolveConsultLaunchRequest refuses duplicate requester or consultant names", async () => {
@@ -1458,10 +1979,10 @@ test("formatPersonaList shows read-only discovery details", async () => {
   assert.match(output, /brand - specialist/);
   assert.match(output, /docs: docs\/workstreams\/brand\//);
   assert.match(output, /skills: brand-skill/);
-  assert.doesNotMatch(output, /launch/i);
+  assert.match(output, /launch: \/brand/);
 });
 
-test("resolveRoundtableLaunchRequest builds a pi-subagents chain with two specialist rounds and synthesis", async () => {
+test("primary generalist receives a roundtable selection prompt", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/pricing.md"), `---
@@ -1476,26 +1997,46 @@ Pricing prompt.
 `);
   await writeText(path.join(root, "docs/workstreams/pricing/model.md"), "Pricing doc\n");
 
-  const roundtable = await resolveRoundtableLaunchRequest(root, {
+  const selection = await resolveRoundtableSelectionRequest(root, {
     query: "Should brand positioning change pricing and guideline language?",
   });
 
-  assert.equal(roundtable.generalist.name, "generalist");
-  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline", "pricing"]);
-  assert.equal(roundtable.context, "fresh");
+  assert.equal(selection.generalist.name, "generalist");
+  assert.deepEqual(selection.candidates.map((agent) => agent.name), ["brand", "guideline", "pricing"]);
+  assert.equal(selection.context, "fresh");
+  assert.match(selection.userMessage, /Pi Persona Round-table Selection/);
+  assert.match(selection.userMessage, /brand: Brand strategy specialist/);
+  assert.match(selection.userMessage, /pricing: Pricing strategy specialist/);
+  assert.match(selection.userMessage, /Call `persona_roundtable` exactly once/);
+  assert.match(selection.userMessage, /Do not call raw `subagent`/);
+  assert.match(selection.userMessage, /present its returned moderator synthesis once/);
+});
+
+test("selected specialists build two roundtable rounds and primary synthesis", async () => {
+  const root = await createWorkspace();
+  const selections = [
+    { name: "guideline", reason: "The policy language needs review." },
+    { name: "brand", reason: "The positioning needs a brand perspective." },
+  ];
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+    selections,
+  });
+
+  assert.deepEqual(selections, [
+    { name: "guideline", reason: "The policy language needs review." },
+    { name: "brand", reason: "The positioning needs a brand perspective." },
+  ]);
+  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["guideline", "brand"]);
   assert.deepEqual(roundtable.subagentParams.chain.map((step) => step.phase), [
     "Round 1",
     "Round 2",
     "Synthesis",
   ]);
-  assert.equal(roundtable.subagentParams.chain[0].parallel.length, 3);
-  assert.equal(roundtable.subagentParams.chain[1].parallel.length, 3);
+  assert.equal(roundtable.subagentParams.chain[0].parallel.length, 2);
+  assert.equal(roundtable.subagentParams.chain[1].parallel.length, 2);
   assert.equal(roundtable.subagentParams.chain[2].agent, "generalist");
-  const pricingRoundOne = roundtable.subagentParams.chain[0].parallel.find((step) => step.agent === "pricing");
   const brandRoundTwo = roundtable.subagentParams.chain[1].parallel.find((step) => step.agent === "brand");
-  assert.deepEqual(pricingRoundOne.reads, ["docs/shared/company.md", "docs/workstreams/pricing/model.md"]);
-  assert.deepEqual(pricingRoundOne.skill, ["shared-skill", "pricing-skill"]);
-  assert.equal(pricingRoundOne.model, "openai/gpt-5");
   assert.deepEqual(brandRoundTwo.reads, ["docs/shared/company.md", "docs/workstreams/brand/brief.md"]);
   assert.deepEqual(brandRoundTwo.skill, ["shared-skill", "brand-skill"]);
   assert.deepEqual(roundtable.subagentParams.chain[2].reads, ["docs/shared/company.md"]);
@@ -1514,9 +2055,22 @@ Pricing prompt.
   }
   assert.match(roundtable.subagentParams.chain[2].task, /Moderator Synthesis/);
   assert.match(roundtable.subagentParams.chain[2].task, /\{previous\}/);
+  assert.match(roundtable.subagentParams.chain[2].task, /Shared operating context/);
+  assert.match(roundtable.subagentParams.task, /Advisory analysis only/);
+  assert.match(roundtable.subagentParams.task, /Do not edit or modify files/);
+  for (const step of [
+    ...roundtable.subagentParams.chain[0].parallel,
+    ...roundtable.subagentParams.chain[1].parallel,
+    roundtable.subagentParams.chain[2],
+  ]) {
+    assert.deepEqual(step.acceptance, {
+      level: "none",
+      reason: "Round-table analysis is advisory and does not require repository changes.",
+    });
+  }
 });
 
-test("resolveRoundtableLaunchRequest refuses duplicate agent names before building a chain", async () => {
+test("roundtable selection refuses duplicate project agent names", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/duplicate-brand.md"), `---
@@ -1530,14 +2084,14 @@ Duplicate brand prompt.
 `);
 
   await assert.rejects(
-    () => resolveRoundtableLaunchRequest(root, {
+    () => resolveRoundtableSelectionRequest(root, {
       query: "Brand guideline question.",
     }),
     /ambiguous agent name 'brand'/,
   );
 });
 
-test("resolveRoundtableLaunchRequest caps the roster at five specialists", async () => {
+test("roundtable selection rejects unknown duplicate and oversized rosters", async () => {
   const root = await createWorkspace();
 
   for (const name of ["alpha", "beta", "delta", "epsilon", "zeta"]) {
@@ -1551,38 +2105,41 @@ skills: shared-skill
 ${name} prompt.
 `);
   }
-
-  const roundtable = await resolveRoundtableLaunchRequest(root, {
-    query: "Market planning question across many specialists.",
-  });
-
-  assert.equal(roundtable.roster.length, 5);
-  assert.ok(!roundtable.roster.some((agent) => agent.role === "generalist"));
-});
-
-test("resolveRoundtableLaunchRequest excludes unrelated zero-score specialists when matches exist", async () => {
-  const root = await createWorkspace();
-
-  await writeText(path.join(root, ".pi/agents/unrelated.md"), `---
-name: unrelated
-role: specialist
-description: Unrelated proof specialist.
-docs:
----
-Unrelated prompt.
-`);
-
-  const roundtable = await resolveRoundtableLaunchRequest(root, {
-    query: "Brand guideline question.",
-  });
-
-  assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline"]);
+  await assert.rejects(
+    () => resolveRoundtableLaunchRequest(root, {
+      query: "Market planning question across many specialists.",
+      selections: [{ name: "unknown", reason: "Unknown." }],
+    }),
+    /unknown specialist: unknown/,
+  );
+  await assert.rejects(
+    () => resolveRoundtableLaunchRequest(root, {
+      query: "Market planning question across many specialists.",
+      selections: [
+        { name: "brand", reason: "First." },
+        { name: "brand", reason: "Second." },
+      ],
+    }),
+    /duplicate specialist: brand/,
+  );
+  await assert.rejects(
+    () => resolveRoundtableLaunchRequest(root, {
+      query: "Market planning question across many specialists.",
+      selections: ["brand", "guideline", "alpha", "beta", "delta", "epsilon"]
+        .map((name) => ({ name, reason: `${name} reason.` })),
+    }),
+    /between 1 and 5 specialists/,
+  );
 });
 
 test("formatRoundtableRosterPreview shows selected specialists and command context", async () => {
   const root = await createWorkspace();
   const roundtable = await resolveRoundtableLaunchRequest(root, {
     query: "Brand guideline question.",
+    selections: [
+      { name: "brand", reason: "Brand positioning is central." },
+      { name: "guideline", reason: "Guideline language needs review." },
+    ],
   });
 
   const preview = formatRoundtableRosterPreview(roundtable);
@@ -1591,7 +2148,130 @@ test("formatRoundtableRosterPreview shows selected specialists and command conte
   assert.match(preview, /Query: Brand guideline question\./);
   assert.match(preview, /Moderator: generalist/);
   assert.match(preview, /- brand - Brand strategy specialist\./);
+  assert.match(preview, /selected because: Brand positioning is central\./);
   assert.match(preview, /- guideline - Guideline reviewer\./);
+});
+
+test("roundtable progress reports phase, activity, tools, sources, and recoverable errors", () => {
+  const tracker = createRoundtableProgressTracker(["brand", "guideline"], { startedAt: 1_000 });
+  tracker.update({
+    progress: [
+      {
+        index: 0,
+        agent: "brand",
+        status: "completed",
+        recentTools: [{ tool: "search_web", args: "query", endMs: 2_000 }],
+        toolCount: 1,
+        turnCount: 1,
+        tokens: 500,
+      },
+      {
+        index: 1,
+        agent: "guideline",
+        status: "running",
+        currentTool: "read_webpage",
+        currentToolArgs: "https://example.com/benchmark",
+        recentTools: [{ tool: "read_webpage", args: "https://example.com/benchmark", endMs: 2_500 }],
+        failedTool: "read_webpage",
+        lastActivityAt: 2_500,
+        toolCount: 2,
+        turnCount: 2,
+        tokens: 1000,
+      },
+    ],
+  }, 3_000);
+
+  const text = tracker.format(4_000);
+  assert.match(text, /Round-table/);
+  assert.match(text, /Round 1 · 1\/2 specialists complete/);
+  assert.match(text, /active 1s ago/);
+  assert.match(text, /3 tools/);
+  assert.match(text, /1 sources/);
+  assert.match(text, /1 recoverable errors/);
+  assert.match(text, /guideline:read_webpage/);
+  assert.match(text, /example\.com\/benchmark/);
+});
+
+test("roundtable progress reports long quiet periods without a cancellation countdown", () => {
+  const tracker = createRoundtableProgressTracker(["brand"], {
+    startedAt: 1_000,
+    idleTimeoutMs: false,
+  });
+  tracker.update({
+    progress: [{
+      index: 0,
+      agent: "brand",
+      status: "running",
+      recentTools: [],
+      toolCount: 0,
+      tokens: 0,
+    }],
+  }, 2_000);
+
+  const text = tracker.format(602_000);
+  assert.match(text, /active 10:00 ago/);
+  assert.doesNotMatch(text, /cancelling|countdown/i);
+});
+
+test("extractRoundtableAnswer selects only the current moderator synthesis and ignores intercom receipts", async () => {
+  const answer = await extractRoundtableAnswer({
+    result: {
+      content: [{ type: "text", text: "Delivered chain subagent results via intercom.\nFull grouped output was sent over intercom." }],
+      details: {
+        results: [
+          { agent: "brand", finalOutput: "Brand position" },
+          { agent: "guideline", finalOutput: "Guideline position" },
+          { agent: "generalist", finalOutput: "Moderator verdict" },
+        ],
+      },
+    },
+  }, "generalist");
+
+  assert.deepEqual(answer, { text: "Moderator verdict", source: "final" });
+
+  const missing = await extractRoundtableAnswer({
+    requestId: "private-request-id",
+    result: {
+      content: [{ type: "text", text: "Delivered chain subagent results via intercom.\nFull grouped output was sent over intercom." }],
+      details: {
+        runId: "private-run-id",
+        results: [{ agent: "brand", finalOutput: "Partial position" }],
+      },
+    },
+  }, "generalist");
+
+  assert.equal(missing.source, "missing");
+  assert.match(missing.text, /no moderator synthesis/i);
+  assert.doesNotMatch(missing.text, /private-request-id|private-run-id|artifact/i);
+});
+
+test("roundtable failure output reports only current phase and agent status", async () => {
+  const root = await createWorkspace();
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+    selections: [
+      { name: "brand", reason: "Brand position." },
+      { name: "guideline", reason: "Guideline evidence." },
+    ],
+  });
+  const text = formatRoundtableBridgeFailure(roundtable, {
+    isError: true,
+    errorText: "internal /tmp/private/run path",
+    result: {
+      details: {
+        runId: "private-run-id",
+        results: [
+          { agent: "brand", exitCode: 0 },
+          { agent: "guideline", exitCode: 1, error: "failed at /tmp/private/artifact" },
+        ],
+      },
+    },
+  });
+
+  assert.match(text, /did not complete during Round 1/);
+  assert.match(text, /Completed agents: brand/);
+  assert.match(text, /Failed agents: guideline/);
+  assert.doesNotMatch(text, /private|\/tmp|run-id|artifact/);
 });
 
 test("runSubagentBridgeRequest emits a pi-subagents slash request", async () => {
@@ -1728,6 +2408,173 @@ test("runSubagentBridgeRequest accepts delayed bridge start and response", async
   assert.equal(response.result.content[0].text, "delayed");
 });
 
+test("runSubagentBridgeRequest rejects when a started bridge stops responding", async () => {
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+  });
+  const request = runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    {
+      requestId: "started-stuck",
+      startTimeoutMs: 50,
+      idleTimeoutMs: 5,
+      maxRuntimeMs: 50,
+    },
+  );
+
+  await assert.rejects(
+    () => Promise.race([
+      request,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("test guard: request stayed pending")), 30)),
+    ]),
+    /pi-subagents slash bridge timed out waiting for response/,
+  );
+  assert.equal(bus.listenerCount("subagent:slash:started"), 0);
+  assert.equal(bus.listenerCount("subagent:slash:response"), 0);
+  assert.equal(bus.listenerCount("subagent:slash:update"), 0);
+  assert.ok(bus.emitted.some((entry) => (
+    entry.event === "subagent:slash:cancel"
+    && entry.data.requestId === "started-stuck"
+  )));
+});
+
+test("runSubagentBridgeRequest resets the idle timeout on matching progress", async () => {
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    setTimeout(() => {
+      events.emit("subagent:slash:update", {
+        requestId: request.requestId,
+        progress: [{ agent: "brand", status: "running" }],
+      });
+    }, 5);
+    setTimeout(() => {
+      events.emit("subagent:slash:response", {
+        requestId: request.requestId,
+        result: { content: [{ type: "text", text: "after progress" }], details: { mode: "single", results: [] } },
+        isError: false,
+      });
+    }, 12);
+  });
+
+  const response = await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    {
+      requestId: "progress-reset",
+      startTimeoutMs: 20,
+      idleTimeoutMs: 10,
+      maxRuntimeMs: 100,
+    },
+  );
+
+  assert.equal(response.result.content[0].text, "after progress");
+});
+
+test("runSubagentBridgeRequest supports disabling idle cancellation", async () => {
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    setTimeout(() => {
+      events.emit("subagent:slash:response", {
+        requestId: request.requestId,
+        result: { content: [{ type: "text", text: "patient result" }], details: { mode: "single", results: [] } },
+        isError: false,
+      });
+    }, 12);
+  });
+
+  const response = await runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    {
+      requestId: "idle-disabled",
+      startTimeoutMs: 20,
+      idleTimeoutMs: false,
+      maxRuntimeMs: 100,
+    },
+  );
+
+  assert.equal(response.result.content[0].text, "patient result");
+  assert.ok(!bus.emitted.some((entry) => entry.event === "subagent:slash:cancel"));
+});
+
+test("runSubagentBridgeRequest has no default max runtime", async () => {
+  const source = await readFile(path.join(process.cwd(), "src/persona/subagent-bridge.js"), "utf8");
+  assert.match(source, /maxRuntimeMs\) \? options\.maxRuntimeMs : undefined/);
+  assert.doesNotMatch(source, /: 900_000/);
+});
+
+test("runSubagentBridgeRequest supports an explicitly requested max runtime", async () => {
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+    const timer = setInterval(() => {
+      events.emit("subagent:slash:update", {
+        requestId: request.requestId,
+        progress: [{ agent: "brand", status: "running" }],
+      });
+    }, 2);
+    setTimeout(() => clearInterval(timer), 30);
+  });
+
+  await assert.rejects(
+    () => Promise.race([
+      runSubagentBridgeRequest(
+        { events: bus },
+        { cwd: "/tmp/example" },
+        { agent: "brand", task: "Task", context: "fresh" },
+        {
+          requestId: "max-runtime",
+          startTimeoutMs: 20,
+          idleTimeoutMs: 50,
+          maxRuntimeMs: 8,
+        },
+      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("test guard: request stayed pending")), 40)),
+    ]),
+    /pi-subagents slash bridge exceeded max runtime/,
+  );
+  assert.ok(bus.emitted.some((entry) => (
+    entry.event === "subagent:slash:cancel"
+    && entry.data.requestId === "max-runtime"
+  )));
+});
+
+test("runSubagentBridgeRequest aborts and emits cancel", async () => {
+  const controller = new AbortController();
+  const bus = createEventBus((request, events) => {
+    events.emit("subagent:slash:started", { requestId: request.requestId });
+  });
+  const request = runSubagentBridgeRequest(
+    { events: bus },
+    { cwd: "/tmp/example" },
+    { agent: "brand", task: "Task", context: "fresh" },
+    {
+      requestId: "aborted-request",
+      startTimeoutMs: 20,
+      idleTimeoutMs: 50,
+      maxRuntimeMs: 100,
+      signal: controller.signal,
+    },
+  );
+
+  controller.abort();
+
+  await assert.rejects(
+    () => Promise.race([
+      request,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("test guard: request stayed pending")), 30)),
+    ]),
+    /pi-subagents slash bridge request was cancelled/,
+  );
+  assert.ok(bus.emitted.some((entry) => (
+    entry.event === "subagent:slash:cancel"
+    && entry.data.requestId === "aborted-request"
+  )));
+});
+
 test("parsePersonaNewArgs accepts setup metadata options", () => {
   const parsed = parsePersonaNewArgs(
     'Market Research --role specialist --description "Market research specialist." --docs docs/workstreams/market/ --skills market-skill',
@@ -1780,8 +2627,8 @@ test("createAgentScaffold writes a minimal user-facing agent file", async () => 
   assert.match(content, /^---\nname: market-researcher\n/m);
   assert.match(content, /role: specialist/);
   assert.match(content, /description: Market Researcher specialist\./);
-  assert.match(content, /docs:\n/);
-  assert.match(content, /skills:\n/);
+  assert.match(content, /docs: \[\]/);
+  assert.match(content, /skills: \[\]/);
   assert.doesNotMatch(content, /tools:/);
   assert.doesNotMatch(content, /consults:/);
   assert.doesNotMatch(content, /tags:/);
@@ -1827,6 +2674,29 @@ test("createAgentScaffold writes provided setup metadata without runtime fields"
   assert.equal(agent.description, "Market research specialist.");
   assert.deepEqual(agent.docs, ["docs/workstreams/market/"]);
   assert.deepEqual(agent.skills, ["market-skill"]);
+});
+
+test("createAgentScaffold writes YAML-safe frontmatter descriptions", async () => {
+  const cases = [
+    ["Brand Colon", "Brand: voice and messaging"],
+    ["Priority Hash", "Needs #1 priority"],
+    ["Bracketed Brand", "[brand] review"],
+  ];
+
+  for (const [rawName, description] of cases) {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-yaml-"));
+    const result = await createAgentScaffold(root, rawName, {
+      description,
+    });
+    const content = await readFile(result.filePath, "utf8");
+    const parsed = parseFrontmatterDocument(content, result.relativePath);
+    const project = await discoverPersonaProject(root);
+
+    assert.deepEqual(parsed.errors, []);
+    assert.equal(parsed.frontmatter.description, description);
+    assert.equal(project.agents[0].description, description);
+    assert.equal(project.agents[0].name, result.agentName);
+  }
 });
 
 test("createAgentScaffold preserves existing project settings without adding runtime overrides", async () => {
@@ -1884,7 +2754,7 @@ test("createPersonaProjectScaffold creates minimal baseline and primary generali
   const generalist = await readFile(path.join(root, ".pi/agents/generalist.md"), "utf8");
   const sharedIndex = await readFile(path.join(root, "docs/shared/_index.md"), "utf8");
   assert.match(baseline, /docs: docs\/shared\//);
-  assert.match(baseline, /skills:\n/);
+  assert.match(baseline, /skills: \[\]/);
   assert.match(generalist, /role: generalist/);
   assert.match(generalist, /primary: true/);
   assert.match(sharedIndex, /# Shared Docs Index/);
@@ -1991,19 +2861,64 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   assert.match(formatPersonaInitManifestReport(result), /Pi Persona Init Draft/);
   assert.match(formatPersonaInitManifestReport(result), /Starting assisted setup interview/);
   assert.doesNotMatch(formatPersonaInitManifestReport(result), /Review or edit the YAML/);
-  assert.match(formatPersonaInitManifestReport(result), /\/persona init --plan --from init-data\/my-business\.yaml/);
+  assert.match(formatPersonaInitManifestReport(result), /assistant will preview the plan/);
 
   const prompt = formatPersonaInitDraftAuthoringPrompt(result);
   assert.match(prompt, /Help me shape the Pi Persona setup manifest at `init-data\/my-business\.yaml`/);
   assert.match(prompt, /Treat me as a new user/);
   assert.match(prompt, /Do not ask me to manually edit YAML/);
   assert.match(prompt, /Ask one question at a time/);
-  assert.match(prompt, /\/persona init --plan --from init-data\/my-business\.yaml/);
+  assert.match(prompt, /call persona_init with action: plan/);
+  assert.match(prompt, /confirmed: true/);
+  assert.match(prompt, /apply result includes persona doctor verification/);
+  assert.match(prompt, /Never use @name syntax/);
 
   await assert.rejects(
     () => createPersonaInitDraft(root, "init-data/my-business.yaml"),
     /draft manifest already exists: init-data\/my-business\.yaml/,
   );
+});
+
+test("manifest validation rejects malformed booleans lists models and doc contents", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-invalid-manifest-"));
+  const valid = starterInitManifest();
+  const cases = [
+    {
+      name: "primary",
+      manifest: valid.replace("    primary: true", "    primary: \"true\""),
+      error: /primary must be true or false/,
+    },
+    {
+      name: "skills",
+      manifest: valid.replace("  skills: []", "  skills:\n    invalid: true"),
+      error: /baseline\.skills: must be a string or an array of non-empty strings/,
+    },
+    {
+      name: "model",
+      manifest: valid.replace(
+        "    description: Routes test business requests.\n",
+        "    description: Routes test business requests.\n    model: [invalid]\n",
+      ),
+      error: /model must be a non-empty string when provided/,
+    },
+    {
+      name: "doc-content",
+      manifest: valid.replace(
+        "    docs/shared/context.md: |\n      TEST_BUSINESS_CONTEXT",
+        "    docs/shared/context.md:\n      invalid: true",
+      ),
+      error: /docs\.files\.docs\/shared\/context\.md must be a string/,
+    },
+  ];
+
+  for (const invalidCase of cases) {
+    const source = `init-data/${invalidCase.name}.yaml`;
+    await writeText(path.join(root, source), invalidCase.manifest);
+    await assert.rejects(
+      () => planPersonaInitFromManifest(root, source),
+      invalidCase.error,
+    );
+  }
 });
 
 test("manifest init plans applies and reports status for a starter layer", async () => {
@@ -2065,6 +2980,50 @@ test("manifest init plans applies and reports status for a starter layer", async
   assert.match(formatPersonaInitManifestReport(indexedStatus), /\[next\] run \/persona doctor/);
 });
 
+test("manifest init writes YAML-safe frontmatter descriptions", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-manifest-yaml-"));
+  await writeText(path.join(root, "init-data/business.yaml"), `version: 1
+project:
+  name: test-business
+baseline:
+  docs: []
+  skills: []
+  prompt: |
+    Shared prompt.
+agents:
+  - name: generalist
+    role: generalist
+    primary: true
+    description: |-
+      Routes research requests, answers from shared context,
+      and synthesizes specialist input.
+    docs: []
+    skills: []
+    prompt: |
+      Generalist prompt.
+  - name: specialist
+    role: specialist
+    description: "[brand] needs #1 review"
+    docs: []
+    skills: []
+    prompt: |
+      Specialist prompt.
+`);
+
+  await applyPersonaInitFromManifest(root, "init-data/business.yaml");
+
+  const project = await discoverPersonaProject(root);
+  assert.deepEqual(project.files.flatMap((file) => file.parseErrors), []);
+  assert.deepEqual(project.agents.map((agent) => agent.description), [
+    "Routes research requests, answers from shared context,\nand synthesizes specialist input.",
+    "[brand] needs #1 review",
+  ]);
+  assert.match(
+    await readFile(path.join(root, ".pi/agents/generalist.md"), "utf8"),
+    /description: \|-\n  Routes research requests, answers from shared context,\n  and synthesizes specialist input\./,
+  );
+});
+
 test("formatAgentScaffoldCreatedMessage gives next setup steps", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-scaffold-"));
 
@@ -2097,6 +3056,7 @@ test("createAgentScaffold refuses to overwrite existing agents", async () => {
 test("normalizeAgentName creates stable pi-subagents compatible names", () => {
   assert.equal(normalizeAgentName("Market Researcher"), "market-researcher");
   assert.equal(normalizeAgentName("  Launch__Reviewer!! "), "launch-reviewer");
+  assert.equal(normalizeAgentName("123"), "agent-123");
   assert.throws(() => normalizeAgentName("!!!"), /agent name must contain at least one letter or number/);
 });
 
@@ -2143,7 +3103,7 @@ Shared pilot context.
   assert.match(list, /brand - specialist/);
   assert.match(list, /docs: docs\/workstreams\/brand\//);
   assert.match(list, /skills: brand-skill/);
-  assert.doesNotMatch(list, /launch/i);
+  assert.match(list, /launch: \/brand/);
 
   const directLaunch = await resolveAgentLaunchRequest(root, "brand", {
     task: "Draft a pilot brand answer.",
@@ -2169,6 +3129,10 @@ Shared pilot context.
 
   const roundtable = await resolveRoundtableLaunchRequest(root, {
     query: "Brand guideline pilot question.",
+    selections: [
+      { name: "brand", reason: "Brand perspective." },
+      { name: "guideline", reason: "Guideline perspective." },
+    ],
   });
   assert.equal(roundtable.generalist.name, "generalist");
   assert.deepEqual(roundtable.roster.map((agent) => agent.name), ["brand", "guideline"]);
@@ -2200,6 +3164,9 @@ Shared pilot context.
   const finalProject = await discoverPersonaProject(root);
   const backup = finalProject.agents.find((agent) => agent.name === "backup-generalist");
   assert.equal(backup.primary, false);
-  const stableRoundtable = await resolveRoundtableLaunchRequest(root, { query: "Stable moderator question." });
+  const stableRoundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Stable moderator question.",
+    selections: [{ name: "pricing", reason: "Pricing perspective." }],
+  });
   assert.equal(stableRoundtable.generalist.name, "generalist");
 });

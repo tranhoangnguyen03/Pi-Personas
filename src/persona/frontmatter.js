@@ -1,4 +1,4 @@
-import { parseDocument } from "yaml";
+import { parseDocument, stringify } from "yaml";
 
 const FRONTMATTER_BOUNDARY = "---";
 
@@ -10,6 +10,7 @@ export function parseFrontmatterDocument(source, filePath = "<memory>") {
   if (lines[0]?.trim() !== FRONTMATTER_BOUNDARY) {
     return {
       frontmatter: {},
+      rawFrontmatter: {},
       body: normalized,
       errors: [],
     };
@@ -19,6 +20,7 @@ export function parseFrontmatterDocument(source, filePath = "<memory>") {
   if (end === -1) {
     return {
       frontmatter: {},
+      rawFrontmatter: {},
       body: normalized,
       errors: [`${filePath}: missing closing frontmatter boundary`],
     };
@@ -36,6 +38,7 @@ export function parseFrontmatterDocument(source, filePath = "<memory>") {
     if (errors.length > 0) {
       return {
         frontmatter: {},
+        rawFrontmatter: {},
         body,
         errors,
       };
@@ -44,18 +47,21 @@ export function parseFrontmatterDocument(source, filePath = "<memory>") {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       return {
         frontmatter: {},
+        rawFrontmatter: {},
         body,
         errors: [`${filePath}: frontmatter must be a YAML mapping`],
       };
     }
     return {
       frontmatter: normalizeFrontmatter(raw),
+      rawFrontmatter: raw,
       body,
       errors: [],
     };
   } catch (error) {
     return {
       frontmatter: {},
+      rawFrontmatter: {},
       body,
       errors: [`${filePath}: ${error instanceof Error ? error.message : String(error)}`],
     };
@@ -77,7 +83,12 @@ function normalizeFrontmatter(raw) {
 }
 
 export function splitList(value) {
-  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
   if (typeof value !== "string") return [];
   const trimmed = value.trim();
   if (!trimmed) return [];
@@ -93,4 +104,12 @@ export function uniqueStrings(values) {
     result.push(value);
   }
   return result;
+}
+
+export function formatYamlScalar(value) {
+  return stringify(String(value), { lineWidth: 0 }).trim();
+}
+
+export function formatYamlField(field, value) {
+  return stringify({ [field]: String(value) }, { lineWidth: 0 }).trimEnd();
 }

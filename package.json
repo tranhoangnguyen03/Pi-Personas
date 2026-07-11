@@ -1,8 +1,23 @@
 {
   "name": "pi-personas",
   "version": "0.1.0",
-  "private": true,
+  "description": "Project-local personas, consults, and round-tables for Pi Coding Agent.",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tranhoangnguyen03/Pi-Personas.git"
+  },
+  "homepage": "https://github.com/tranhoangnguyen03/Pi-Personas#readme",
+  "bugs": {
+    "url": "https://github.com/tranhoangnguyen03/Pi-Personas/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -16,26 +31,27 @@
     ]
   },
   "files": [
+    "CHANGELOG.md",
+    "LICENSE",
     "README.md",
+    "RELEASING.md",
     "docs/",
     "extensions/",
     "init-data/",
     "src/"
   ],
   "scripts": {
-    "check": "node --check src/persona/agents.js && node --check src/persona/consult.js && node --check src/persona/doc-index.js && node --check src/persona/doctor.js && node --check src/persona/frontmatter.js && node --check src/persona/index.js && node --check src/persona/init-manifest.js && node --check src/persona/launch.js && node --check src/persona/pi-output.js && node --check src/persona/resolver.js && node --check src/persona/roundtable.js && node --check src/persona/runtime.js && node --check src/persona/scaffold.js && node --check src/persona/schema.js && node --check src/persona/subagent-bridge.js && node --experimental-strip-types --check extensions/pi-persona.ts",
-    "test": "npm run check && node --test"
+    "check": "node --check src/persona/agents.js && node --check src/persona/consult.js && node --check src/persona/doc-index.js && node --check src/persona/doctor.js && node --check src/persona/frontmatter.js && node --check src/persona/index.js && node --check src/persona/init-manifest.js && node --check src/persona/launch.js && node --check src/persona/pi-output.js && node --check src/persona/progress.js && node --check src/persona/resolver.js && node --check src/persona/roundtable.js && node --check src/persona/runtime.js && node --check src/persona/scaffold.js && node --check src/persona/schema.js && node --check src/persona/subagent-bridge.js && node --experimental-strip-types --check extensions/pi-persona.ts",
+    "test": "npm run check && npm run test:unit && npm run test:smoke",
+    "test:unit": "node --test test/persona-core.test.js",
+    "test:smoke": "node --test test/pi-rpc-smoke.test.js"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "pi-intercom": ">=0.6.0",
-    "pi-subagents": ">=0.31.0"
+    "@earendil-works/pi-coding-agent": ">=0.80.6 <0.81.0",
+    "pi-subagents": ">=0.34.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
-      "optional": true
-    },
-    "pi-intercom": {
       "optional": true
     },
     "pi-subagents": {
@@ -43,7 +59,11 @@
     }
   },
   "dependencies": {
+    "@earendil-works/pi-tui": "^0.80.6",
     "typebox": "^1.3.2",
     "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.6"
   }
 }

@@ -1,12 +1,17 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { parseFrontmatterDocument } from "./frontmatter.js";
+import { validatePersonaFile } from "./schema.js";
 
 const AGENT_DIR = ".pi/agents";
 
 export async function discoverPersonaProject(root) {
-  const agentRoot = path.join(root, AGENT_DIR);
+  const resolvedAgentRoot = await resolveWorkspacePathForAccess(root, AGENT_DIR);
+  if (!resolvedAgentRoot.ok) {
+    throw new Error(`persona agent path must stay inside workspace: ${AGENT_DIR} (${resolvedAgentRoot.reason})`);
+  }
+  const agentRoot = resolvedAgentRoot.path;
   const files = await listMarkdownFiles(agentRoot).catch((error) => {
     if (error?.code === "ENOENT") return [];
     throw error;
@@ -19,21 +24,25 @@ export async function discoverPersonaProject(root) {
     const parsed = parseFrontmatterDocument(source, relativePath);
     const fileName = path.basename(filePath);
     const isControl = fileName.startsWith("_");
-    const launchable = !isControl && Boolean(parsed.frontmatter.name && parsed.frontmatter.description);
-
-    parsedFiles.push({
+    const file = {
       filePath,
       relativePath,
       fileName,
       isControl,
-      launchable,
+      launchable: false,
       frontmatter: parsed.frontmatter,
+      rawFrontmatter: parsed.rawFrontmatter,
       body: parsed.body,
       parseErrors: parsed.errors,
       name: parsed.frontmatter.name,
       role: parsed.frontmatter.role,
       description: parsed.frontmatter.description,
-    });
+    };
+    file.schemaIssues = validatePersonaFile(file);
+    file.launchable = !isControl
+      && file.parseErrors.length === 0
+      && !file.schemaIssues.some((issue) => issue.severity === "error");
+    parsedFiles.push(file);
   }
 
   const baseline = parsedFiles.find((file) => file.fileName === "_baseline.md") ?? null;
@@ -157,7 +166,7 @@ async function listMarkdownFiles(dir) {
 }
 
 export async function pathExists(root, relativePath) {
-  const resolved = resolveWorkspacePath(root, relativePath);
+  const resolved = await resolveWorkspacePathForAccess(root, relativePath);
   if (!resolved.ok) return false;
   try {
     await stat(resolved.path);
@@ -196,4 +205,41 @@ export function resolveWorkspacePath(root, relativePath) {
     ok: true,
     path: resolvedPath,
   };
+}
+
+export async function resolveWorkspacePathForAccess(root, relativePath) {
+  const resolved = resolveWorkspacePath(root, relativePath);
+  if (!resolved.ok) return resolved;
+
+  const workspaceRoot = path.resolve(root);
+  const realWorkspaceRoot = await realpath(workspaceRoot);
+  let existingPath = resolved.path;
+
+  while (true) {
+    try {
+      const realExistingPath = await realpath(existingPath);
+      if (!isWithin(realWorkspaceRoot, realExistingPath)) {
+        return {
+          ok: false,
+          reason: "symlink-escape",
+        };
+      }
+      return resolved;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = path.dirname(existingPath);
+      if (parent === existingPath) {
+        return {
+          ok: false,
+          reason: "unresolvable",
+        };
+      }
+      existingPath = parent;
+    }
+  }
+}
+
+function isWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

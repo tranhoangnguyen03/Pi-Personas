@@ -1,8 +1,8 @@
 # Pi Persona Blueprint
 
 Pi Persona is a generic persona-agent extension for Pi Coding Agent. It uses
-Pi's active chat session for direct persona answers and uses `pi-subagents` and
-`pi-intercom` only for peer consults, round-tables, and child-session support.
+Pi's active chat session for direct persona answers and uses `pi-subagents`
+only for peer consults, round-tables, and child-session support.
 
 The extension adds a thin semantic layer over Pi. It does not replace Pi's
 session model, tool registry, permissions, plugin conventions, skill loading,
@@ -20,10 +20,8 @@ Pi owns:
 
 `pi-subagents` owns child Pi sessions, project-level subagent discovery, child
 execution, fresh or forked launch context, `reads`, native skills, foreground
-and background execution, status, resume, interrupt, and child safety.
-
-`pi-intercom` owns targeted session-to-session communication and native child
-progress or result channels used by `pi-subagents`.
+and background execution, native supervisor and result channels, status,
+resume, interrupt, and child safety.
 
 Pi Persona owns:
 
@@ -58,6 +56,8 @@ The four main parts are:
 
 Adding a persona should be data, not code. Users should be able to create a new
 agent file, run `/persona doctor`, and launch it without adding a new launcher.
+`/persona use <name>` is the canonical path; direct `/<name>` commands are
+convenience aliases when the name is not reserved or colliding.
 
 ## Awareness, Not Restriction
 
@@ -69,22 +69,23 @@ Pi Persona is an awareness layer, not a security boundary.
   specialist docs unless the user promotes those docs to shared context.
 - Persona prompts describe intended context and routing behavior.
 - Pi, `pi-subagents`, and the host filesystem still own actual access.
+- Pi Persona rejects declared paths and writes that escape the physical
+  workspace, including escapes through symlinks.
 
 Friction should be added only for concrete failure modes. By default, inform,
 nudge, validate, and keep the user moving.
 
 ## Runtime Dependencies
 
-Consult and round-table workflows require these Pi packages:
+Consult and round-table workflows require this Pi package:
 
 ```sh
 pi install npm:pi-subagents
-pi install npm:pi-intercom
 ```
 
-These packages must be installed and configured through Pi, not only present as
-nested npm dependencies. Direct persona mode can still work when child-runtime
-packages are missing. `/persona doctor`, `persona_consult`, and
+It must be installed and configured through Pi, not only present as a nested
+npm dependency. Direct persona mode can still work when the child runtime is
+missing. `/persona doctor`, `persona_consult`, and
 `/persona-roundtable` perform a runtime preflight and report install or
 configuration guidance before attempting bridge execution.
 
@@ -171,8 +172,15 @@ docs index. It preserves existing files.
 `/persona init --from <file>`, and `/persona init status --from <file>` support
 manifest-backed setup. The draft command creates a starter manifest and starts
 an assisted setup interview in the active Pi session; the assistant edits the
-YAML for the user and previews the plan before apply. The manifest format is
-documented in [`../../init-data/README.md`](../../init-data/README.md).
+YAML, calls the model-facing `persona_init` tool to preview the plan, asks for
+explicit approval, then applies, receives an automatic doctor report, and checks
+status. The slash commands remain available for direct user control. The
+manifest format is documented in
+[`../../init-data/README.md`](../../init-data/README.md).
+
+`/persona use <name> [query]` activates any valid project persona through the
+stable namespace. This is the guaranteed route for reserved names and command
+collisions.
 
 `/<primary-generalist-name> [query]`, usually `/generalist [query]`, activates
 the primary generalist in the current chat. If the command includes a query, Pi
@@ -180,6 +188,11 @@ answers that query as the generalist.
 
 `/<specialist-name> [query]` activates a specialist in the current chat. If the
 command includes a query, Pi answers that query as the specialist.
+
+Direct persona command names are registered opportunistically as projects are
+seen, but every invocation resolves against the active workspace. A stale
+command name from another workspace must fail with `/persona-list` guidance
+instead of activating stale persona state. Reserved aliases use `/persona use`.
 
 `/persona-list` is read-only discovery. It lists the primary generalist,
 non-primary generalists, specialists, descriptions, docs, and skills.
@@ -191,8 +204,12 @@ mode.
 directories.
 
 `/persona-roundtable <query>` runs an explicit multi-persona workflow. The
-primary generalist selects up to five relevant specialists, gathers independent
-positions, allows revision, and synthesizes the answer.
+command activates the primary generalist in the current chat. It returns a
+schema-validated selection of one to five specialists with reasons through one
+`persona_roundtable` tool call. That call launches one child workflow: only the
+selected roster gathers independent positions and revises after peer reveal,
+then the primary generalist synthesizes the answer. Selection failure is
+explicit and never falls back to a lexical heuristic.
 
 ## Active Persona Direction
 
@@ -208,7 +225,8 @@ primary generalist, the bootstrap command returns setup guidance to run
 The active persona can use `persona_consult` when peer expertise is needed.
 That tool is the semantic consult boundary: it resolves the consultant, runs
 the child through `pi-subagents`, extracts the consultant answer, and returns
-compact provenance for synthesis.
+compact provenance for synthesis. The requester must match the active persona,
+and a persona cannot consult itself.
 
 Raw `subagent` guidance should not appear in direct persona prompts.
 `subagent list` lists global Pi subagents: builtins, user package agents, and
@@ -228,5 +246,6 @@ active workspace.
 - The requesting persona writes the consult summary.
 - Consulted personas receive their own resolved awareness package.
 - Round-table is explicit and bounded.
+- The primary generalist owns round-table roster selection.
 - Validation should be cheap and actionable.
 - Access policy belongs to Pi and the host environment.

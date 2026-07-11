@@ -2,9 +2,12 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 
-import { resolveWorkspacePath } from "./agents.js";
+import {
+  resolveWorkspacePath,
+  resolveWorkspacePathForAccess,
+} from "./agents.js";
 import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
-import { uniqueStrings } from "./frontmatter.js";
+import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
 
 const VALID_ROLES = new Set(["generalist", "specialist"]);
@@ -32,7 +35,7 @@ export function parsePersonaInitArgs(args) {
 }
 
 export async function createPersonaInitDraft(root, outPath) {
-  const resolved = resolveWorkspacePath(root, outPath);
+  const resolved = await resolveWorkspacePathForAccess(root, outPath);
   if (!resolved.ok) throw new Error(`draft path must stay inside workspace: ${outPath}`);
 
   const projectName = projectNameFromOutputPath(outPath);
@@ -99,7 +102,7 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
   };
 }
 
-export function formatPersonaInitManifestReport(result) {
+export function formatPersonaInitManifestReport(result, options = {}) {
   if (result.mode === "draft") return formatDraftReport(result);
   if (result.mode === "status") return formatStatusReport(result);
   const title = result.mode === "apply" ? "Pi Persona Init Applied" : "Pi Persona Init Plan";
@@ -125,7 +128,9 @@ export function formatPersonaInitManifestReport(result) {
     "",
     result.mode === "plan"
       ? `Next: run /persona init --from ${result.source}`
-      : "Next: run /persona doctor",
+      : options.doctorIncluded
+        ? "Persona doctor verification follows."
+        : "Next: run /persona doctor",
   );
   return lines.join("\n");
 }
@@ -139,7 +144,7 @@ function formatDraftReport(result) {
     "",
     "Starting assisted setup interview. The manifest is a working draft; answer the setup questions in this chat before applying it.",
     "",
-    `Next: run /persona init --plan --from ${result.source}`,
+    "Next: continue the interview. The assistant will preview the plan before asking to apply it.",
   ].join("\n");
 }
 
@@ -153,7 +158,8 @@ export function formatPersonaInitDraftAuthoringPrompt(result) {
     "As I answer, edit the manifest for me using conservative defaults: one primary generalist, small specialists with clear routing descriptions, shared facts in docs/shared/, and specialist facts in docs/workstreams/<name>/.",
     "Do not invent secrets, private business facts, unsupported skills, runtime-only fields, or legacy tools/consults/tags metadata.",
     "",
-    `When the manifest has enough information, run /persona init --plan --from ${result.source}, summarize the plan, and ask before applying it.`,
+    `When the manifest has enough information, call persona_init with action: plan and source: ${result.source}. Summarize that plan and ask for explicit approval. Only after approval, call persona_init with action: apply, source: ${result.source}, and confirmed: true. The apply result includes persona doctor verification. Then call persona_init with action: status and follow its next-step guidance.`,
+    "When explaining activation, use /persona use <name> or the direct slash command shown by /persona-list. Never use @name syntax.",
   ].join("\n");
 }
 
@@ -271,7 +277,7 @@ async function docsIndexStatusItems(root, manifest) {
 
 async function hasManagedDocIndex(root, docPath) {
   const indexPath = `${docPath.replace(/\/+$/g, "")}/${DOC_INDEX_FILE}`;
-  const resolved = resolveWorkspacePath(root, indexPath);
+  const resolved = await resolveWorkspacePathForAccess(root, indexPath);
   if (!resolved.ok) return false;
   try {
     const content = await readFile(resolved.path, "utf8");
@@ -283,7 +289,7 @@ async function hasManagedDocIndex(root, docPath) {
 }
 
 async function readManifest(root, sourcePath) {
-  const resolved = resolveWorkspacePath(root, sourcePath);
+  const resolved = await resolveWorkspacePathForAccess(root, sourcePath);
   if (!resolved.ok) throw new Error(`manifest path must stay inside workspace: ${sourcePath}`);
   const source = await readFile(resolved.path, "utf8");
   const document = parseDocument(source, {
@@ -346,6 +352,15 @@ function normalizeAgent(raw, label, root) {
   }
   const role = String(raw.role).trim();
   if (!VALID_ROLES.has(role)) throw new Error(`${label}: role must be generalist or specialist`);
+  if (Object.hasOwn(raw, "primary") && typeof raw.primary !== "boolean") {
+    throw new Error(`${label}: primary must be true or false`);
+  }
+  if (raw.primary === true && role !== "generalist") {
+    throw new Error(`${label}: primary: true is only valid on role: generalist`);
+  }
+  if (Object.hasOwn(raw, "model") && raw.model !== null && raw.model !== undefined && !nonEmpty(raw.model)) {
+    throw new Error(`${label}: model must be a non-empty string when provided`);
+  }
   const primary = raw.primary === true;
   return {
     name,
@@ -354,7 +369,7 @@ function normalizeAgent(raw, label, root) {
     description: String(raw.description).trim(),
     docs: normalizePathList(raw.docs, `${label}.docs`, root),
     skills: normalizeSkillList(raw.skills, `${label}.skills`),
-    model: nonEmpty(raw.model) ? String(raw.model).trim() : "",
+    model: nonEmpty(raw.model) ? raw.model.trim() : "",
     prompt: String(raw.prompt).trim(),
   };
 }
@@ -364,22 +379,25 @@ function normalizeDocsFiles(value, sourcePath, root) {
   if (!isRecord(value)) throw new Error(`${sourcePath}: docs.files must be a mapping`);
   return Object.entries(value).map(([filePath, content]) => {
     assertWorkspacePath(root, filePath, `${sourcePath}: docs.files`);
+    if (typeof content !== "string") {
+      throw new Error(`${sourcePath}: docs.files.${filePath} must be a string`);
+    }
     return {
       path: filePath,
-      content: `${String(content ?? "").replace(/\r\n/g, "\n").trimEnd()}\n`,
+      content: `${content.replace(/\r\n/g, "\n").trimEnd()}\n`,
     };
   });
 }
 
 function normalizePathList(value, label, root) {
-  return normalizeList(value).map((entry) => {
+  return normalizeList(value, label).map((entry) => {
     assertWorkspacePath(root, entry, label);
     return entry;
   });
 }
 
 function normalizeSkillList(value, label) {
-  return normalizeList(value).map((entry) => {
+  return normalizeList(value, label).map((entry) => {
     if (looksLikePath(entry)) {
       throw new Error(`${label}: skills must be native pi-subagents skill names, not paths: ${entry}`);
     }
@@ -415,12 +433,12 @@ ${baseline.prompt}
 }
 
 function renderAgent(agent) {
-  const modelLine = agent.model ? `model: ${agent.model}\n` : "";
+  const modelLine = agent.model ? `${formatYamlField("model", agent.model)}\n` : "";
   const primaryLine = agent.role === "generalist" ? `primary: ${agent.primary ? "true" : "false"}\n` : "";
   return `---
 name: ${agent.name}
 role: ${agent.role}
-${primaryLine}description: ${agent.description}
+${primaryLine}${formatYamlField("description", agent.description)}
 ${modelLine}${renderListField("docs", agent.docs)}${renderListField("skills", agent.skills)}---
 ${agent.prompt}
 `;
@@ -428,12 +446,12 @@ ${agent.prompt}
 
 function renderListField(field, values) {
   const unique = uniqueStrings(values);
-  if (unique.length === 0) return `${field}:\n`;
-  return `${field}:\n${unique.map((value) => `  - ${value}`).join("\n")}\n`;
+  if (unique.length === 0) return `${field}: []\n`;
+  return `${field}:\n${unique.map((value) => `  - ${formatYamlScalar(value)}`).join("\n")}\n`;
 }
 
 async function writeFileIfMissing(root, relativePath, content) {
-  const resolved = resolveWorkspacePath(root, relativePath);
+  const resolved = await resolveWorkspacePathForAccess(root, relativePath);
   if (!resolved.ok) throw new Error(`path must stay inside workspace: ${relativePath}`);
   await mkdir(path.dirname(resolved.path), { recursive: true });
   try {
@@ -446,7 +464,7 @@ async function writeFileIfMissing(root, relativePath, content) {
 }
 
 async function exists(root, relativePath) {
-  const resolved = resolveWorkspacePath(root, relativePath);
+  const resolved = await resolveWorkspacePathForAccess(root, relativePath);
   if (!resolved.ok) return false;
   try {
     await access(resolved.path);
@@ -498,10 +516,20 @@ function tokenizeArgs(input) {
   return tokens;
 }
 
-function normalizeList(value) {
-  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
-  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
-  return [];
+function normalizeList(value, label) {
+  if (value === undefined || value === null) return [];
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label}: must be a string or an array of non-empty strings`);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`${label}[${index}]: must be a non-empty string`);
+    }
+    return item.trim();
+  });
 }
 
 function looksLikePath(value) {

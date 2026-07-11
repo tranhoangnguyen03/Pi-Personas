@@ -11,12 +11,17 @@ New users should start with the assisted draft command:
 
 The command creates a starter manifest and starts an agentic setup interview in
 the Pi session. Answer the questions in chat; the assistant should edit the YAML
-for you, then preview the result before applying it.
+for you, call `persona_init` to preview the result, ask for explicit approval,
+and only then apply it with `confirmed: true`. Apply includes a doctor report so
+schema or runtime failures cannot be mistaken for successful onboarding.
 
 Advanced users can still copy `_template.yaml` by hand when they already know
 the exact operating layer they want.
 
-## Command Flow
+## Manual Command Flow
+
+The assistant uses the equivalent `persona_init` tool during guided setup.
+Advanced users can run these slash commands directly.
 
 Create a working draft and start the assisted setup interview:
 
@@ -81,9 +86,10 @@ workstream briefs, and `_index.md` files.
 
 ## Editing Rules
 
-- Keep paths inside the workspace.
+- Keep paths inside the physical workspace; symlink escapes are rejected.
 - Use relative paths, not absolute paths.
-- Use command-safe agent names: lowercase letters, numbers, and hyphens.
+- Use command-safe agent names beginning with a lowercase letter, followed by
+  lowercase letters, numbers, or hyphens.
 - Keep exactly one primary generalist.
 - Put shared facts in `baseline` or shared docs.
 - Put specialist-specific facts in that specialist's docs and prompt.
@@ -103,7 +109,14 @@ When helping edit these manifests:
 - Do not invent secrets, private business facts, or unsupported skills.
 - Prefer small, named specialists with clear routing descriptions.
 - Keep generated docs concise enough that the user can review them.
-- Run or tell the user to run the plan command before applying.
+- Call `persona_init` with `action: plan` before applying.
+- Summarize the plan and ask for explicit approval.
+- Only after approval, call `persona_init` with `action: apply` and
+  `confirmed: true`, then call it with `action: status`.
+- Treat the doctor report returned by apply as the readiness check.
+- Explain activation with `/persona use <name>` or the direct command shown by
+  `/persona-list`; never use `@name` syntax.
 
 Use `_template.yaml` as the minimal reference. Use
-`business-operating-layer.yaml` as a fuller example of a multi-persona setup.
+`[EXAMPLE]business-operating-layer.yaml` as a fuller example of a multi-persona
+setup.
