@@ -21,6 +21,8 @@ persona or when `/persona-roundtable` runs a multi-persona workflow.
 
 ## Runtime Dependencies
 
+Pi Persona requires Pi Coding Agent 0.80.6 through 0.80.x.
+
 Pi Persona is built on Pi package extensions. Consult and round-table workflows
 require `pi-subagents` to be installed and visible to Pi:
 

@@ -302,8 +302,10 @@ test("package tarball excludes local runtime state and tests", async () => {
   assert.ok(files.includes("LICENSE"));
   assert.ok(files.includes("CHANGELOG.md"));
   assert.ok(files.includes("RELEASING.md"));
+  assert.ok(files.includes("docs/_about_pi_persona/design.md"));
   assert.ok(files.includes("extensions/pi-persona.ts"));
   assert.ok(files.includes("src/persona/index.js"));
+  assert.equal(files.some((filePath) => filePath.startsWith("docs/superpowers/")), false);
   assert.deepEqual(forbidden, []);
 });
 

@@ -2,7 +2,7 @@
 
 All notable changes to Pi Persona are documented here.
 
-## 0.1.0 - 2026-07-10
+## 0.1.0 - 2026-07-11
 
 - Added project-local active personas with baseline, docs, and native skill awareness.
 - Added canonical `/persona use`, direct aliases, active state, and footer status.

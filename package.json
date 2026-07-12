@@ -35,7 +35,7 @@
     "LICENSE",
     "README.md",
     "RELEASING.md",
-    "docs/",
+    "docs/_about_pi_persona/",
     "extensions/",
     "init-data/",
     "src/"

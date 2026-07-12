@@ -12,8 +12,8 @@ New users should start with the assisted draft command:
 The command creates a starter manifest and starts an agentic setup interview in
 the Pi session. Answer the questions in chat; the assistant should edit the YAML
 for you, call `persona_init` to preview the result, ask for explicit approval,
-and only then apply it with `confirmed: true`. Apply includes a doctor report so
-schema or runtime failures cannot be mistaken for successful onboarding.
+and only then apply it with `confirmed: true`. Assisted apply includes a doctor
+report so schema or runtime failures cannot be mistaken for successful onboarding.
 Planning and apply reject unchanged starter placeholders. Doctor also rejects
 known starter placeholders that remain in active persona files or declared
 docs, including the incomplete-spec markers caught during manual verification.
@@ -50,7 +50,8 @@ Check setup progress after applying:
 /persona init status --from init-data/my-operating-layer.yaml
 ```
 
-Validate the resulting persona project:
+Validate the resulting persona project. Manual slash-command apply does not run
+this automatically:
 
 ```text
 /persona doctor
