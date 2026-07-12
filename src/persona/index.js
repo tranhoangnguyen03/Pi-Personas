@@ -32,7 +32,12 @@ export {
   statusPersonaInitFromManifest,
 } from "./init-manifest.js";
 export { sendPersonaOutput } from "./pi-output.js";
-export { createConsultProgressTracker, createRoundtableProgressTracker } from "./progress.js";
+export {
+  createConsultProgressTracker,
+  createRoundtableProcessDetails,
+  createRoundtableProgressTracker,
+  formatRoundtableProcessLine,
+} from "./progress.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export {
   extractRoundtableAnswer,

@@ -17,6 +17,41 @@ export function createRoundtableProgressTracker(roster, options = {}) {
   });
 }
 
+export function createRoundtableProcessDetails(roundtable, response, summary) {
+  const results = Array.isArray(response?.result?.details?.results) ? response.result.details.results : [];
+  return {
+    specialists: roundtable.roster.length,
+    rounds: 2,
+    expectedSteps: roundtable.roster.length * 2 + 1,
+    completedSteps: results.filter((entry) => entry?.exitCode === 0 || entry?.status === "completed").length,
+    failedSteps: results.filter((entry) => entry?.exitCode > 0 || entry?.status === "failed").length,
+    ...summary,
+  };
+}
+
+export function formatRoundtableProcessLine(process) {
+  if (!process) return "";
+  const parts = [
+    `${process.specialists} specialists`,
+    `${process.rounds} rounds`,
+    `${process.completedSteps}/${process.expectedSteps} steps complete`,
+    `${formatProcessDuration(process.elapsedMs)} elapsed`,
+  ];
+  if (process.toolCount > 0) parts.push(`${process.toolCount} tools`);
+  if (process.turns > 0) parts.push(`${process.turns} turns`);
+  if (process.categories?.files > 0) parts.push(`${process.categories.files} files`);
+  if (process.sources > 0) parts.push(`${process.sources} external sources`);
+  if (process.recoverableErrors > 0) parts.push(`${process.recoverableErrors} recoverable errors`);
+  if (process.failedSteps > 0) parts.push(`${process.failedSteps} failed steps`);
+  return parts.join(" · ");
+}
+
+function formatProcessDuration(value) {
+  const seconds = Math.max(0, Math.floor((Number(value) || 0) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}:${String(seconds % 60).padStart(2, "0")}` : `${seconds}s`;
+}
+
 function createObservableProgressTracker(title, options = {}) {
   const startedAt = options.startedAt ?? Date.now();
   const idleTimeoutMs = options.idleTimeoutMs === false

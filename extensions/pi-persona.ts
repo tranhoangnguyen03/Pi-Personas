@@ -1,7 +1,9 @@
 import {
   getMarkdownTheme,
   keyHint,
+  type AgentToolUpdateCallback,
   type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -9,6 +11,7 @@ import { Type } from "typebox";
 import {
   assertPersonaRuntimeReady,
   createConsultProgressTracker,
+  createRoundtableProcessDetails,
   createRoundtableProgressTracker,
   createAgentScaffold,
   createDocsIndex,
@@ -28,6 +31,7 @@ import {
   formatPersonaList,
   formatRoundtableBridgeFailure,
   formatRoundtableBridgeResult,
+  formatRoundtableProcessLine,
   isDirectPersonaCommandName,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
@@ -49,6 +53,14 @@ const CONSULT_IDLE_TIMEOUT_MS = 180_000;
 const CONSULT_HEARTBEAT_MS = 10_000;
 const IS_PI_SUBAGENT_CHILD = process.env.PI_SUBAGENT_CHILD === "1";
 
+type ToolResultLike = {
+  content?: Array<{ type?: string; text?: string }>;
+  isError?: boolean;
+  details?: { process?: unknown };
+};
+
+type ResolvedRoundtable = Awaited<ReturnType<typeof resolveRoundtableLaunchRequest>>;
+
 export default function registerPiPersona(pi: ExtensionAPI): void {
   if (IS_PI_SUBAGENT_CHILD) return;
 
@@ -56,26 +68,29 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   let pendingRoundtable: { cwd: string; query: string; moderator: string } | undefined;
   const registeredPersonaCommands = new Set<string>();
 
-  const updateActivePersonaStatus = (ctx: any) => {
+  const updateActivePersonaStatus = (ctx: ExtensionContext) => {
     ctx.ui?.setStatus?.(
       "pi-persona-active",
       activePersonaName ? `persona /${activePersonaName}` : undefined,
     );
   };
 
-  const restoreActivePersona = (ctx: any, options: { resetIfMissing?: boolean } = {}) => {
+  const restoreActivePersona = (ctx: ExtensionContext, options: { resetIfMissing?: boolean } = {}) => {
     const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (entry?.type !== "custom" || entry.customType !== ACTIVE_PERSONA_STATE_TYPE) continue;
-      const agentName = entry.data?.agentName;
+      const data = entry.data;
+      const agentName = data && typeof data === "object" && "agentName" in data
+        ? data.agentName
+        : undefined;
       activePersonaName = typeof agentName === "string" && agentName ? agentName : undefined;
       return;
     }
     if (options.resetIfMissing) activePersonaName = undefined;
   };
 
-  const setActivePersona = (ctx: any, agentName: string | undefined) => {
+  const setActivePersona = (ctx: ExtensionContext, agentName: string | undefined) => {
     activePersonaName = agentName;
     pi.appendEntry(ACTIVE_PERSONA_STATE_TYPE, { agentName: agentName ?? null });
     updateActivePersonaStatus(ctx);
@@ -122,7 +137,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         return new Text(theme.fg("toolOutput", stripConsultProgressHeading(output)), 0, 0);
       }
 
-      const failed = result.isError === true;
+      const failed = (result as ToolResultLike).isError === true;
       const status = failed
         ? theme.fg("error", "✗ Consultation failed")
         : theme.fg("success", "✓ Consultation complete");
@@ -219,7 +234,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         text += `\n${theme.fg("dim", "2. Peer reveal and revision")}`;
         text += `\n${theme.fg("dim", "3. Primary-generalist synthesis")}`;
       } else {
-        const names = selections.map((selection: any) => selection.name).filter(Boolean).join(", ");
+        const names = selections.map((selection) => selection.name).filter(Boolean).join(", ");
         if (names) text += `\n${theme.fg("dim", `Panel: ${names}`)}`;
         text += `\n${theme.fg("dim", keyHint("app.tools.expand", "to inspect selection"))}`;
       }
@@ -231,11 +246,11 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         return new Text(theme.fg("toolOutput", stripRoundtableProgressHeading(output)), 0, 0);
       }
 
-      const failed = result.isError === true;
+      const failed = (result as ToolResultLike).isError === true;
       const status = failed
         ? theme.fg("error", "✗ Round-table failed")
         : theme.fg("success", "✓ Round-table complete");
-      const process = formatRoundtableProcessLine(result.details?.process);
+      const process = formatRoundtableProcessLine((result as ToolResultLike).details?.process);
       if (!expanded) {
         return new Text(`${status}${process ? `\n${theme.fg("dim", process)}` : ""}`, 0, 0);
       }
@@ -281,7 +296,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             isError: true,
             details: {
               moderator: roundtable.generalist.name,
-              roster: roundtable.roster.map((agent: any) => agent.name),
+              roster: roundtable.roster.map((agent) => agent.name),
               context: roundtable.context,
               process,
               result: response.result,
@@ -300,7 +315,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           isError: isError || undefined,
           details: {
             moderator: roundtable.generalist.name,
-            roster: roundtable.roster.map((agent: any) => agent.name),
+            roster: roundtable.roster.map((agent) => agent.name),
             context: roundtable.context,
             process,
             answer,
@@ -319,7 +334,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     },
   });
 
-  const activatePersona = async (agentName: string, args: string, ctx: any) => {
+  const activatePersona = async (agentName: string, args: string, ctx: ExtensionContext) => {
     try {
       const launch = await resolveAgentLaunchRequest(ctx.cwd, agentName, {
         task: normalizeCommandText(args),
@@ -547,7 +562,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         try {
           const parsed = parsePersonaIndexArgs(rawArgs);
           const result = await createDocsIndex(ctx.cwd, parsed);
-          const hasError = result.results.some((entry: any) => entry.status === "error");
+          const hasError = result.results.some((entry) => entry.status === "error");
           sendPersonaOutput(pi, ctx, formatDocsIndexReport(result), hasError ? "error" : "info");
         } catch (error) {
           sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
@@ -664,8 +679,9 @@ function truncatePanelText(value: unknown, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function firstToolResultText(result: any): string {
-  const part = result?.content?.find((entry: any) => entry?.type === "text");
+function firstToolResultText(result: unknown): string {
+  const content = (result as ToolResultLike)?.content;
+  const part = content?.find((entry) => entry?.type === "text");
   return typeof part?.text === "string" ? part.text.trim() : "";
 }
 
@@ -677,42 +693,7 @@ function stripRoundtableProgressHeading(value: string): string {
   return value.replace(/^\[pi-persona\] Round-table\n+/, "").trim();
 }
 
-function createRoundtableProcessDetails(roundtable: any, response: any, summary: any) {
-  const results = Array.isArray(response?.result?.details?.results) ? response.result.details.results : [];
-  return {
-    specialists: roundtable.roster.length,
-    rounds: 2,
-    expectedSteps: roundtable.roster.length * 2 + 1,
-    completedSteps: results.filter((entry: any) => entry?.exitCode === 0 || entry?.status === "completed").length,
-    failedSteps: results.filter((entry: any) => entry?.exitCode > 0 || entry?.status === "failed").length,
-    ...summary,
-  };
-}
-
-function formatRoundtableProcessLine(process: any): string {
-  if (!process) return "";
-  const parts = [
-    `${process.specialists} specialists`,
-    `${process.rounds} rounds`,
-    `${process.completedSteps}/${process.expectedSteps} steps complete`,
-    `${formatPanelDuration(process.elapsedMs)} elapsed`,
-  ];
-  if (process.toolCount > 0) parts.push(`${process.toolCount} tools`);
-  if (process.turns > 0) parts.push(`${process.turns} turns`);
-  if (process.categories?.files > 0) parts.push(`${process.categories.files} files`);
-  if (process.sources > 0) parts.push(`${process.sources} external sources`);
-  if (process.recoverableErrors > 0) parts.push(`${process.recoverableErrors} recoverable errors`);
-  if (process.failedSteps > 0) parts.push(`${process.failedSteps} failed steps`);
-  return parts.join(" · ");
-}
-
-function formatPanelDuration(value: unknown): string {
-  const seconds = Math.max(0, Math.floor((Number(value) || 0) / 1_000));
-  const minutes = Math.floor(seconds / 60);
-  return minutes > 0 ? `${minutes}:${String(seconds % 60).padStart(2, "0")}` : `${seconds}s`;
-}
-
-function createConsultProgressReporter(onUpdate: any, agent: string) {
+function createConsultProgressReporter(onUpdate: AgentToolUpdateCallback<unknown> | undefined, agent: string) {
   const tracker = createConsultProgressTracker(agent, { idleTimeoutMs: CONSULT_IDLE_TIMEOUT_MS });
   let latestUpdate: unknown;
   let lastPublishedAt = 0;
@@ -729,7 +710,7 @@ function createConsultProgressReporter(onUpdate: any, agent: string) {
   };
 
   const heartbeat = setInterval(() => publish(true), CONSULT_HEARTBEAT_MS);
-  (heartbeat as any).unref?.();
+  heartbeat.unref();
   publish(true);
 
   return {
@@ -744,8 +725,11 @@ function createConsultProgressReporter(onUpdate: any, agent: string) {
   };
 }
 
-function createRoundtableProgressReporter(onUpdate: any, roundtable: any) {
-  const tracker = createRoundtableProgressTracker(roundtable.roster.map((agent: any) => agent.name), {
+function createRoundtableProgressReporter(
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  roundtable: ResolvedRoundtable,
+) {
+  const tracker = createRoundtableProgressTracker(roundtable.roster.map((agent) => agent.name), {
     idleTimeoutMs: false,
     moderator: roundtable.generalist.name,
   });
@@ -764,7 +748,7 @@ function createRoundtableProgressReporter(onUpdate: any, roundtable: any) {
   };
 
   const heartbeat = setInterval(() => publish(true), CONSULT_HEARTBEAT_MS);
-  (heartbeat as any).unref?.();
+  heartbeat.unref();
   publish(true);
 
   return {

@@ -13,6 +13,7 @@ import {
   createPersonaInitDraft,
   createPersonaProjectScaffold,
   createConsultProgressTracker,
+  createRoundtableProcessDetails,
   createRoundtableProgressTracker,
   discoverPersonaProject,
   createAgentScaffold,
@@ -27,6 +28,7 @@ import {
   formatDoctorReport,
   formatPersonaInitDraftAuthoringPrompt,
   formatRoundtableBridgeFailure,
+  formatRoundtableProcessLine,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
@@ -363,6 +365,11 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /createDocsIndex/);
   assert.match(source, /name:\s*"persona_init"/);
   assert.match(source, /\/persona use <name>/);
+});
+
+test("extension has no explicit any escape hatches", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  assert.doesNotMatch(source, /:\s*any\b|as\s+any\b/);
 });
 
 test("extension starts agentic authoring after persona init draft", async () => {
@@ -2426,6 +2433,26 @@ test("roundtable progress reports long quiet periods without a cancellation coun
   const text = tracker.format(602_000);
   assert.match(text, /active 10:00 ago/);
   assert.doesNotMatch(text, /cancelling|countdown/i);
+});
+
+test("roundtable process details summarize completed and failed steps", () => {
+  const details = createRoundtableProcessDetails(
+    { roster: [{ name: "brand" }], generalist: { name: "generalist" } },
+    { result: { details: { results: [{ status: "completed" }, { status: "failed" }] } } },
+    {
+      elapsedMs: 2_000,
+      toolCount: 1,
+      turns: 2,
+      categories: {},
+      sources: 0,
+      recoverableErrors: 0,
+    },
+  );
+
+  assert.equal(details.expectedSteps, 3);
+  assert.equal(details.completedSteps, 1);
+  assert.equal(details.failedSteps, 1);
+  assert.match(formatRoundtableProcessLine(details), /1\/3 steps complete/);
 });
 
 test("extractRoundtableAnswer selects only the current moderator synthesis and ignores intercom receipts", async () => {

@@ -42,7 +42,8 @@
   ],
   "scripts": {
     "check:syntax": "node scripts/check-syntax.js && node --experimental-strip-types --check extensions/pi-persona.ts",
-    "check": "npm run check:syntax",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run check:syntax && npm run typecheck",
     "test": "npm run check && npm run test:unit && npm run test:smoke",
     "test:unit": "node --test test/persona-core.test.js",
     "test:smoke": "node --test test/pi-rpc-smoke.test.js"
@@ -65,6 +66,8 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.80.6"
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
   }
 }
