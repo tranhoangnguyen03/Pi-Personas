@@ -2,9 +2,9 @@
 
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
-**Goal:** Remove the six identified maintainability risks without changing Pi Persona's public behavior or redesigning its architecture.
+**Goal:** Remove the six identified maintainability risks, close one confirmed settings-file security gap, and strengthen release confidence without changing Pi Persona's public behavior or redesigning its architecture.
 
-**Architecture:** Keep `extensions/pi-persona.ts` as the lifecycle/registration entry point and keep domain behavior in `src/persona/`. Add only two focused shared modules: one for command argument tokenization and one for child-answer value handling. Centralize role and skill-name policy in `schema.js`, automate syntax discovery, and add real TypeScript checking for the extension.
+**Architecture:** Keep `extensions/pi-persona.ts` as the lifecycle/registration entry point and keep domain behavior in `src/persona/`. Add only two focused shared modules: one for command argument tokenization and one for child-answer value handling. Centralize role and skill-name policy in `schema.js`, automate syntax discovery, add real TypeScript checking for the extension, and preserve settings-file permissions during duplicate-runtime repair.
 
 **Tech Stack:** Node.js 22.19+, ESM, TypeScript, TypeBox, Node's built-in test runner and assertion library.
 
@@ -20,10 +20,91 @@ Address these issues only:
 4. Repeated and ambiguously different role constants.
 5. File-by-file syntax-check script.
 6. Large, loosely typed `extensions/pi-persona.ts`.
+7. Duplicate-runtime repair replaces private Pi settings files with default-permission temporary files.
 
 Do not add caching, redesign persona discovery, remove `resolveAgentPreview`, inline `pi-output.js`, or change public commands. Those were lower-priority observations, not part of this cleanup.
 
+The final verification also adds behavior-level coverage for the successful consult adapter path and validates the shipped init-data fixtures. These are test-only release-confidence additions, not new product scope.
+
 Before implementation, commit or stash the existing release-cleanup changes. Execute this plan in a dedicated worktree so refactoring commits do not mix with the pending release cleanup.
+
+---
+
+### Task 0: Preserve private settings permissions during runtime repair
+
+**Files:**
+- Modify: `src/persona/doctor.js:1,219-249`
+- Modify: `test/persona-core.test.js` near the duplicate-runtime repair tests
+
+This task is a pre-release security gate and should run before the refactors below. The current atomic rewrite creates the temporary file with default permissions. On a typical `022` umask, repairing a `0600` Pi settings file replaces it with a `0644` file even though the backup remains `0600`. Pi settings can contain unrelated private configuration, so repair must not broaden access.
+
+**Step 1: Add a failing permission-preservation test**
+
+Create duplicate project runtime declarations as the existing repair test does, set `.pi/settings.json` to mode `0600`, run `repairRuntimePackageDuplicates()`, and assert that the repaired file and backup remain `0600`. Also assert that no process temporary file remains:
+
+```js
+test("runtime duplicate repair preserves private settings permissions", {
+  skip: process.platform === "win32",
+}, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-private-settings-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-private-agent-"));
+  const settingsPath = path.join(root, ".pi/settings.json");
+  await writeText(settingsPath, `${JSON.stringify({
+    packages: ["npm:pi-subagents", "github:example/pi-subagents"],
+  })}\n`);
+  await chmod(settingsPath, 0o600);
+
+  await repairRuntimePackageDuplicates(root, { agentDir });
+
+  assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(`${settingsPath}.pi-personas.bak`)).mode & 0o777, 0o600);
+  assert.equal(
+    (await readdir(path.dirname(settingsPath))).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+```
+
+Add the required `chmod`, `readdir`, and `stat` imports from `node:fs/promises`. Reuse the test suite's normal cleanup hooks.
+
+**Step 2: Run the focused test and verify failure**
+
+Run:
+
+```sh
+node --test --test-name-pattern="preserves private settings permissions" test/persona-core.test.js
+```
+
+Expected on POSIX: FAIL because the repaired file is currently created with mode `0644` under the usual test umask.
+
+**Step 3: Preserve mode and clean up temporary files**
+
+In `repairSettingsRuntimePackages()`:
+
+1. Read the original settings file's permission bits with `stat()`.
+2. Copy the backup and explicitly `chmod()` it to the original mode, including when an older backup already exists.
+3. Write the temporary file with the original mode and explicitly `chmod()` it before rename so umask cannot silently narrow or broaden the intended bits.
+4. Wrap the temporary write and rename in `try/finally`, removing the temporary path with `rm(..., { force: true })` on either success or failure.
+
+Do not change the JSON transformation, backup name, kept-package policy, repair report, or reload requirement.
+
+**Step 4: Run focused and full verification**
+
+Run:
+
+```sh
+node --test --test-name-pattern="runtime duplicate repair" test/persona-core.test.js
+npm test
+```
+
+Expected: PASS; repaired settings content is unchanged from current behavior and original permissions are retained.
+
+**Step 5: Commit**
+
+```sh
+git add src/persona/doctor.js test/persona-core.test.js
+git commit -m "fix: preserve settings permissions during runtime repair"
+```
 
 ---
 
@@ -652,13 +733,78 @@ git commit -m "docs: document shared persona boundaries"
 
 ---
 
+### Task 7: Close automated release-confidence gaps
+
+**Files:**
+- Modify: `test/persona-core.test.js` near the extension consult and package tests
+- Modify: `test/pi-rpc-smoke.test.js`
+- Modify: `.github/workflows/ci.yml`
+
+The domain modules have strong behavior coverage, and the round-table adapter already has a successful extension-harness test. The corresponding successful `persona_consult` adapter path is not exercised end to end, while the real Pi RPC smoke currently proves only extension loading and `/persona-list`. The shipped init-data examples are also not executed by tests.
+
+**Step 1: Add a successful consult adapter test**
+
+Using `createExtensionHarness()`, a disposable workspace, and the existing fake bridge event bus:
+
+1. Configure a disposable `pi-subagents` package and Pi settings.
+2. Activate a requester persona.
+3. Execute `persona_consult` with a different known persona.
+4. Emit matching `started`, `update`, and `response` events.
+5. Assert exactly one bridge request, fresh context by default, resolved consultant reads and skills, progress publication, returned answer, compact provenance, and no raw intercom receipt.
+
+This should be a behavior test. Do not add another source-text regular-expression assertion for this path.
+
+**Step 2: Exercise setup in the real Pi RPC smoke**
+
+Run the RPC process in a disposable workspace rather than the repository root. Execute `/persona init`, then `/persona-list`, and assert that the generated primary generalist is visible. Keep the process offline and continue loading the extension from its absolute repository path.
+
+This verifies real command routing, scaffold writes, subsequent discovery, and visible command output without invoking a model or external child runtime.
+
+**Step 3: Validate shipped init-data fixtures**
+
+Add package-fixture tests that assert:
+
+- `init-data/[EXAMPLE]business-operating-layer.yaml` successfully plans and produces the expected multi-persona entries.
+- `init-data/_template.yaml` is intentionally rejected until its documented placeholders are replaced.
+- both files remain included in `npm pack --dry-run --json`.
+
+**Step 4: Keep whitespace validation in CI**
+
+Add `git diff --check` to `.github/workflows/ci.yml` so the documented automated gate also runs on every push and pull request.
+
+Do not add a coverage dependency or a brittle global coverage threshold in this task. The aim is to cover the known adapter and fixture gaps directly.
+
+**Step 5: Run verification**
+
+Run:
+
+```sh
+node --test --test-name-pattern="successful consult|init-data fixtures" test/persona-core.test.js
+node --test test/pi-rpc-smoke.test.js
+npm test
+git diff --check
+```
+
+Expected: PASS with no production behavior changes.
+
+**Step 6: Commit**
+
+```sh
+git add test/persona-core.test.js test/pi-rpc-smoke.test.js .github/workflows/ci.yml
+git commit -m "test: cover consult and packaged setup paths"
+```
+
+---
+
 ## Completion criteria
 
+- Runtime duplicate repair preserves the original permissions of Pi settings and backup files and leaves no temporary file behind.
 - One `tokenizeArgs` implementation exists.
 - One answer-value helper implementation exists for the shared behavior.
 - Role and skill-name policy is defined only in `schema.js`.
 - New `src/persona/**/*.js` files are syntax-checked automatically.
 - `extensions/pi-persona.ts` passes strict TypeScript and contains no explicit `any`.
 - Pure process summarization no longer lives in the extension entry point.
+- The successful consult adapter path and shipped init-data fixtures have behavior-level coverage.
 - All automated and manual release gates pass.
 - Public commands, tool schemas, answer precedence, and roundtable privacy remain unchanged.
