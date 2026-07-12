@@ -26,12 +26,10 @@ export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
     const startTimeout = setTimeout(() => {
       fail("pi-subagents slash bridge did not respond. Ensure pi-subagents is installed and loaded in this Pi session.");
     }, startTimeoutMs);
-    startTimeout.unref?.();
 
     const maxRuntimeTimeout = maxRuntimeMs === undefined ? undefined : setTimeout(() => {
       fail("pi-subagents slash bridge exceeded max runtime.", true);
     }, maxRuntimeMs);
-    maxRuntimeTimeout?.unref?.();
 
     const resetIdleTimeout = () => {
       clearTimeout(idleTimeout);
@@ -39,7 +37,6 @@ export function runSubagentBridgeRequest(pi, ctx, params, options = {}) {
       idleTimeout = setTimeout(() => {
         fail("pi-subagents slash bridge timed out waiting for response.", true);
       }, idleTimeoutMs);
-      idleTimeout.unref?.();
     };
 
     const abortRequest = () => {

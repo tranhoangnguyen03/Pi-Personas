@@ -24,3 +24,5 @@ All notable changes to Pi Persona are documented here.
 - Added consult-style round-table transparency with collapsed and expanded
   selection panels, accumulated per-child progress, human-readable activity,
   phase and next-step guidance, and a final execution summary.
+- Kept bridge timeout timers active until awaited requests settle so headless
+  sessions reliably report missing or stalled child runtimes before exiting.
