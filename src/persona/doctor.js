@@ -1,4 +1,4 @@
-import { copyFile, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -236,9 +236,20 @@ async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalK
 
   const backupPath = `${settings.path}.pi-personas.bak`;
   const temporaryPath = `${settings.path}.${process.pid}.tmp`;
+  const mode = (await stat(settings.path)).mode & 0o777;
   await copyFile(settings.path, backupPath);
-  await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, "utf8");
-  await rename(temporaryPath, settings.path);
+  await chmod(backupPath, mode);
+  await rm(temporaryPath, { force: true });
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, {
+      encoding: "utf8",
+      mode,
+    });
+    await chmod(temporaryPath, mode);
+    await rename(temporaryPath, settings.path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
   repairs.push({
     scope: settings.scope,
     settingsPath: settings.path,

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1101,6 +1101,31 @@ test("runtime duplicate repair keeps one global pi-subagents package and preserv
     "npm:pi-subagents",
   ]);
   assert.deepEqual(await repairRuntimePackageDuplicates(root, { agentDir }), []);
+});
+
+test("runtime duplicate repair preserves private settings permissions", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-private-settings-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-private-agent-"));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+  });
+  const settingsPath = path.join(root, ".pi/settings.json");
+  await writeText(settingsPath, `${JSON.stringify({
+    packages: ["npm:pi-subagents", "github:example/pi-subagents"],
+  })}\n`);
+  await chmod(settingsPath, 0o600);
+
+  await repairRuntimePackageDuplicates(root, { agentDir });
+
+  assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(`${settingsPath}.pi-personas.bak`)).mode & 0o777, 0o600);
+  assert.equal(
+    (await readdir(path.dirname(settingsPath))).some((name) => name.endsWith(".tmp")),
+    false,
+  );
 });
 
 test("runtime preflight repairs duplicates before a consult can launch", async () => {
