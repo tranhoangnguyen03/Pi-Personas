@@ -70,13 +70,40 @@ Exit Pi, then remove the disposable project with `rm -rf "$SMOKE_DIR"`.
 
 ## Publish
 
-After the automated and manual gates pass:
+For the initial release, `package.json` and `CHANGELOG.md` are already prepared
+as `0.1.0`; do not run `npm version` again. For later releases, update both in a
+release PR before following this section.
+
+After the release PR is merged, start from the exact clean `main` commit that
+will be published:
 
 ```sh
-npm version <patch|minor|major>
-npm publish --access public
-git push --follow-tags
+git switch main
+git pull --ff-only
+npm ci
+npm test
+npm audit --omit=dev
+npm pack --dry-run
+git diff --check
+npm whoami
 ```
 
-Publishing and pushing are intentional maintainer actions; the test and release
-scripts do not mutate npm or GitHub state.
+Before the initial publish, `npm view pi-personas version` should return `E404`.
+For later releases, the version in `package.json` must be greater than the
+published version. Then publish, tag that exact commit, and create the matching
+GitHub release:
+
+```sh
+VERSION="$(node -p "require('./package.json').version")"
+npm publish --access public
+git tag -a "v$VERSION" -m "Pi Persona v$VERSION"
+git push origin "v$VERSION"
+gh release create "v$VERSION" \
+  --verify-tag \
+  --title "Pi Persona v$VERSION" \
+  --generate-notes
+```
+
+`prepublishOnly` reruns the full test suite immediately before npm accepts the
+package. npm authentication, publishing, tag pushes, and GitHub release
+creation remain intentional maintainer actions.

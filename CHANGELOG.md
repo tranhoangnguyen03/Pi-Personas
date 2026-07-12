@@ -2,7 +2,7 @@
 
 All notable changes to Pi Persona are documented here.
 
-## 0.1.0 - 2026-07-11
+## 0.1.0 - 2026-07-12
 
 - Added project-local active personas with baseline, docs, and native skill awareness.
 - Added canonical `/persona use`, direct aliases, active state, and footer status.
@@ -18,8 +18,9 @@ All notable changes to Pi Persona are documented here.
   acceptance, correlated result extraction, phase-aware live progress, and no
   automatic runtime or inactivity cancellation after the bridge starts.
 - Added direct in-process bridge result handling for round-tables, runtime
-  compatibility enforcement for `pi-subagents` 0.34.0+, and deterministic rejection of known
-  unresolved onboarding placeholders during manifest and doctor validation.
+  compatibility enforcement for `pi-subagents` 0.34.0+, and deterministic
+  rejection of known unresolved onboarding placeholders during manifest and
+  doctor validation.
 - Added consult-style round-table transparency with collapsed and expanded
   selection panels, accumulated per-child progress, human-readable activity,
   phase and next-step guidance, and a final execution summary.

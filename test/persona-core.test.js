@@ -335,6 +335,7 @@ test("runtime Pi packages are optional peers for plain npm installs", async () =
   assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.publishConfig.access, "public");
+  assert.equal(manifest.scripts.prepublishOnly, "npm test");
 });
 
 test("README maintainer doc links point to checked-in files", async () => {

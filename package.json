@@ -44,6 +44,7 @@
     "check:syntax": "node scripts/check-syntax.js && node --experimental-strip-types --check extensions/pi-persona.ts",
     "typecheck": "tsc -p tsconfig.json",
     "check": "npm run check:syntax && npm run typecheck",
+    "prepublishOnly": "npm test",
     "test": "npm run check && npm run test:unit && npm run test:smoke",
     "test:unit": "node --test test/persona-core.test.js",
     "test:smoke": "node --test test/pi-rpc-smoke.test.js"
