@@ -16,7 +16,7 @@ export { discoverPersonaProject } from "./agents.js";
 export {
   assertPersonaRuntimeReady,
   formatDoctorReport,
-  PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
   repairRuntimePackageDuplicates,
   runDoctor,
 } from "./doctor.js";
@@ -32,7 +32,12 @@ export {
   statusPersonaInitFromManifest,
 } from "./init-manifest.js";
 export { sendPersonaOutput } from "./pi-output.js";
-export { createConsultProgressTracker, createRoundtableProgressTracker } from "./progress.js";
+export {
+  createConsultProgressTracker,
+  createRoundtableProcessDetails,
+  createRoundtableProgressTracker,
+  formatRoundtableProcessLine,
+} from "./progress.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export {
   extractRoundtableAnswer,
@@ -53,7 +58,10 @@ export {
   renderAgentScaffold,
 } from "./scaffold.js";
 export {
+  isAuthorablePersonaRole,
   isDirectPersonaCommandName,
+  isPathLikeSkillName,
+  isPersonaRole,
   isSafeAgentName,
   validatePersonaFile,
   validatePersonaSchema,

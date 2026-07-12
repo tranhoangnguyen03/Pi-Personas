@@ -1,13 +1,20 @@
 import { readFile } from "node:fs/promises";
+import {
+  childResults,
+  isIntercomReceiptText,
+  normalizeAnswerText,
+  requireText,
+  stringifyAnswerValue,
+} from "./answer-values.js";
 import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
 
 export function buildConsultEnvelope(input) {
-  const requester = requireText(input.requester, "requester");
-  const consultant = requireText(input.consultant, "consultant");
-  const question = requireText(input.question, "question");
-  const summary = requireText(input.summary, "summary");
+  const requester = requireText(input.requester, "consult requester is required");
+  const consultant = requireText(input.consultant, "consult consultant is required");
+  const question = requireText(input.question, "consult question is required");
+  const summary = requireText(input.summary, "consult summary is required");
   const context = input.context === "fork" ? "fork" : "fresh";
 
   return {
@@ -136,23 +143,12 @@ function buildConsultTask(scope, envelope) {
 }
 
 function findAgent(project, name, label) {
-  const agentName = requireText(name, label);
+  const agentName = requireText(name, `consult ${label} is required`);
   return findUniqueAgent(project, agentName, label);
-}
-
-function requireText(value, field) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`consult ${field} is required`);
-  }
-  return value.trim();
 }
 
 function optionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeAnswerText(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "(no output)";
 }
 
 function firstChildText(response, key) {
@@ -162,17 +158,6 @@ function firstChildText(response, key) {
     if (text) return text;
   }
   return undefined;
-}
-
-function stringifyAnswerValue(value) {
-  if (typeof value === "string") return value.trim() || undefined;
-  if (value === undefined || value === null) return undefined;
-  return JSON.stringify(value, null, 2);
-}
-
-function childResults(response) {
-  const results = response?.result?.details?.results;
-  return Array.isArray(results) ? results : [];
 }
 
 function artifactOutputPaths(response) {
@@ -204,12 +189,6 @@ function bridgeResponseText(response) {
       .trim();
   }
   return "";
-}
-
-function isIntercomReceiptText(text) {
-  const lines = text.trim().split(/\r?\n/).map((line) => line.trim());
-  return /^Delivered (?:single subagent result|parallel subagent results|chain subagent results) via intercom\.$/.test(lines[0] ?? "")
-    && lines.includes("Full grouped output was sent over intercom.");
 }
 
 function missingAnswerText(response) {

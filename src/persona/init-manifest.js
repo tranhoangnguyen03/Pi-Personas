@@ -6,11 +6,12 @@ import {
   resolveWorkspacePath,
   resolveWorkspacePathForAccess,
 } from "./agents.js";
+import { tokenizeArgs } from "./command-args.js";
 import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
+import { isAuthorablePersonaRole, isPathLikeSkillName } from "./schema.js";
 
-const VALID_ROLES = new Set(["generalist", "specialist"]);
 const TEMPLATE_PLACEHOLDERS = [
   "Add the user's business facts, priorities, constraints, audience, products, services, channels, and recurring decisions here.",
   "Replace this with the specialist's operating notes.",
@@ -27,7 +28,7 @@ export function findPersonaTemplatePlaceholders(value) {
 }
 
 export function parsePersonaInitArgs(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = tokenizeArgs(args, "unterminated quoted value in /persona init arguments");
   if (tokens.length === 0) return { mode: "basic" };
   if (tokens[0] === "draft") {
     const out = readOption(tokens.slice(1), "out");
@@ -382,7 +383,7 @@ function normalizeAgent(raw, label, root) {
     throw new Error(`${label}: name must already be command-safe: ${normalizeAgentName(name)}`);
   }
   const role = String(raw.role).trim();
-  if (!VALID_ROLES.has(role)) throw new Error(`${label}: role must be generalist or specialist`);
+  if (!isAuthorablePersonaRole(role)) throw new Error(`${label}: role must be generalist or specialist`);
   if (Object.hasOwn(raw, "primary") && typeof raw.primary !== "boolean") {
     throw new Error(`${label}: primary must be true or false`);
   }
@@ -429,7 +430,7 @@ function normalizePathList(value, label, root) {
 
 function normalizeSkillList(value, label) {
   return normalizeList(value, label).map((entry) => {
-    if (looksLikePath(entry)) {
+    if (isPathLikeSkillName(entry)) {
       throw new Error(`${label}: skills must be native pi-subagents skill names, not paths: ${entry}`);
     }
     return entry;
@@ -521,32 +522,6 @@ function readOption(tokens, key) {
   return "";
 }
 
-function tokenizeArgs(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  for (const char of String(input).trim()) {
-    if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) tokens.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (quote) throw new Error("unterminated quoted value in /persona init arguments");
-  if (current) tokens.push(current);
-  return tokens;
-}
-
 function normalizeList(value, label) {
   if (value === undefined || value === null) return [];
   if (typeof value === "string") {
@@ -561,10 +536,6 @@ function normalizeList(value, label) {
     }
     return item.trim();
   });
-}
-
-function looksLikePath(value) {
-  return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
 }
 
 function isRecord(value) {

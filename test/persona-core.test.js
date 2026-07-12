@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   createPersonaInitDraft,
   createPersonaProjectScaffold,
   createConsultProgressTracker,
+  createRoundtableProcessDetails,
   createRoundtableProgressTracker,
   discoverPersonaProject,
   createAgentScaffold,
@@ -27,6 +28,7 @@ import {
   formatDoctorReport,
   formatPersonaInitDraftAuthoringPrompt,
   formatRoundtableBridgeFailure,
+  formatRoundtableProcessLine,
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
@@ -284,6 +286,20 @@ test("package manifest exposes Pi Persona as a Pi extension package", async () =
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-persona.ts"]);
 });
 
+test("syntax checker discovers nested JavaScript files", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-syntax-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeText(path.join(root, "valid.js"), "export const ok = true;\n");
+  await writeText(path.join(root, "nested/broken.js"), "function {\n");
+
+  await assert.rejects(
+    () => execFileAsync(process.execPath, ["scripts/check-syntax.js", root], {
+      cwd: process.cwd(),
+    }),
+    /broken\.js/,
+  );
+});
+
 test("package tarball excludes local runtime state and tests", async () => {
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
     cwd: process.cwd(),
@@ -304,6 +320,8 @@ test("package tarball excludes local runtime state and tests", async () => {
   assert.ok(files.includes("RELEASING.md"));
   assert.ok(files.includes("docs/_about_pi_persona/design.md"));
   assert.ok(files.includes("extensions/pi-persona.ts"));
+  assert.ok(files.includes("init-data/_template.yaml"));
+  assert.ok(files.includes("init-data/[EXAMPLE]business-operating-layer.yaml"));
   assert.ok(files.includes("src/persona/index.js"));
   assert.equal(files.some((filePath) => filePath.startsWith("docs/superpowers/")), false);
   assert.deepEqual(forbidden, []);
@@ -313,10 +331,11 @@ test("runtime Pi packages are optional peers for plain npm installs", async () =
   const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
 
   assert.equal(manifest.peerDependencies["pi-intercom"], undefined);
-  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.35.0");
+  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.34.0");
   assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.publishConfig.access, "public");
+  assert.equal(manifest.scripts.prepublishOnly, "npm test");
 });
 
 test("README maintainer doc links point to checked-in files", async () => {
@@ -349,6 +368,11 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /createDocsIndex/);
   assert.match(source, /name:\s*"persona_init"/);
   assert.match(source, /\/persona use <name>/);
+});
+
+test("extension has no explicit any escape hatches", async () => {
+  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+  assert.doesNotMatch(source, /:\s*any\b|as\s+any\b/);
 });
 
 test("extension starts agentic authoring after persona init draft", async () => {
@@ -582,6 +606,85 @@ test("persona consult requires and matches the active requester", async () => {
   assert.match(mismatch.content[0].text, /requester must match active persona 'generalist'/);
 });
 
+test("successful consult runs through the extension adapter", async (t) => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-consult-runtime-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ name: "pi-subagents", version: "0.34.0" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(async () => {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    await rm(root, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+  });
+
+  const requests = [];
+  const progressUpdates = [];
+  const harness = await createExtensionHarness(root, {
+    onSubagentRequest(request, events) {
+      requests.push(request);
+      events.emit("subagent:slash:started", { requestId: request.requestId });
+      events.emit("subagent:slash:update", {
+        requestId: request.requestId,
+        progress: [{
+          index: 0,
+          agent: "guideline",
+          status: "running",
+          currentTool: "read",
+          recentTools: [],
+          toolCount: 1,
+          turnCount: 1,
+        }],
+      });
+      events.emit("subagent:slash:response", {
+        requestId: request.requestId,
+        isError: false,
+        result: {
+          content: [{
+            type: "text",
+            text: "Delivered single subagent result via intercom.\nFull grouped output was sent over intercom.",
+          }],
+          details: {
+            results: [{ agent: "guideline", finalOutput: "Guideline approves with one revision." }],
+          },
+        },
+      });
+    },
+  });
+
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  await harness.commands.get("brand").handler("", harness.ctx);
+  const result = await harness.tools.get("persona_consult").execute(
+    "consult",
+    {
+      requester: "brand",
+      consultant: "guideline",
+      question: "Review the proposed brand direction.",
+      summary: "The brand persona needs a guideline check.",
+    },
+    undefined,
+    (update) => progressUpdates.push(update),
+    harness.ctx,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].params.agent, "guideline");
+  assert.equal(requests[0].params.context, "fresh");
+  assert.ok(requests[0].params.reads.includes("docs/shared/company.md"));
+  assert.ok(requests[0].params.reads.includes("docs/workstreams/guideline/rules.md"));
+  assert.deepEqual(requests[0].params.skill, ["shared-skill", "guideline-skill"]);
+  assert.ok(progressUpdates.some((update) => update.content[0].text.includes("Consulting guideline")));
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0].text, /Guideline approves with one revision/);
+  assert.match(result.content[0].text, /Consulted:/);
+  assert.doesNotMatch(result.content[0].text, /Delivered single subagent result/);
+});
+
 test("extension bootstraps /generalist before project agents exist", async () => {
   const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
   const bootstrapIndex = source.indexOf('registerPersonaCommand("generalist")');
@@ -674,7 +777,7 @@ test("roundtable command delegates selection to the primary generalist and the t
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   await writeText(
     path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
-    `${JSON.stringify({ name: "pi-subagents", version: "0.35.0" })}\n`,
+    `${JSON.stringify({ name: "pi-subagents", version: "0.34.0" })}\n`,
   );
   await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -771,7 +874,7 @@ test("roundtable command delegates selection to the primary generalist and the t
   );
 
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].params.resultDelivery, "response-only");
+  assert.equal("resultDelivery" in requests[0].params, false);
   assert.deepEqual(requests[0].params.chain.map((step) => step.phase), ["Round 1", "Round 2", "Synthesis"]);
   assert.match(progressUpdates.at(-1).content[0].text, /Round 1/);
   assert.match(progressUpdates.at(-1).content[0].text, /5 tools/);
@@ -945,7 +1048,7 @@ Bad control prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -994,7 +1097,7 @@ Legacy prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1020,7 +1123,7 @@ Brand prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1101,6 +1204,31 @@ test("runtime duplicate repair keeps one global pi-subagents package and preserv
     "npm:pi-subagents",
   ]);
   assert.deepEqual(await repairRuntimePackageDuplicates(root, { agentDir }), []);
+});
+
+test("runtime duplicate repair preserves private settings permissions", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-private-settings-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-private-agent-"));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+  });
+  const settingsPath = path.join(root, ".pi/settings.json");
+  await writeText(settingsPath, `${JSON.stringify({
+    packages: ["npm:pi-subagents", "github:example/pi-subagents"],
+  })}\n`);
+  await chmod(settingsPath, 0o600);
+
+  await repairRuntimePackageDuplicates(root, { agentDir });
+
+  assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(`${settingsPath}.pi-personas.bak`)).mode & 0o777, 0o600);
+  assert.equal(
+    (await readdir(path.dirname(settingsPath))).some((name) => name.endsWith(".tmp")),
+    false,
+  );
 });
 
 test("runtime preflight repairs duplicates before a consult can launch", async () => {
@@ -1200,22 +1328,22 @@ test("runtime dependency preflight returns install and configuration guidance", 
   );
 });
 
-test("doctor warns about unmanaged round-table delivery and round-table preflight rejects it", async () => {
+test("doctor warns about unsupported round-table runtimes and round-table preflight rejects them", async () => {
   const root = await createWorkspace();
   const dependencyStatus = {
-    piSubagents: { ok: true, configured: true, version: "0.34.0", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
+    piSubagents: { ok: true, configured: true, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
   };
 
   const doctor = await runDoctor(root, { dependencyStatus });
   assert.equal(doctor.status, "warning");
-  assert.ok(doctor.issues.some((issue) => issue.message.includes("lacks managed round-table result delivery")));
+  assert.ok(doctor.issues.some((issue) => issue.message.includes("older than the supported round-table runtime")));
 
   await assert.rejects(
     () => assertPersonaRuntimeReady(root, {
       dependencyStatus,
-      minimumPiSubagentsVersion: "0.35.0",
+      minimumPiSubagentsVersion: "0.34.0",
     }),
-    /pi-subagents 0\.34\.0 is incompatible; managed round-tables require >=0\.35\.0/,
+    /pi-subagents 0\.33\.1 is incompatible; round-tables require >=0\.34\.0/,
   );
 
   await assert.doesNotReject(() => assertPersonaRuntimeReady(root, { dependencyStatus }));
@@ -1235,7 +1363,7 @@ Replace this with the specialist's operating notes.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, configured: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, configured: true, version: "0.34.0", path: "/tmp/pi-subagents" },
     },
   });
 
@@ -1259,7 +1387,7 @@ Manual prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1284,7 +1412,7 @@ Manual prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1369,7 +1497,7 @@ test("doctor warns when nested directory docs have no index", async () => {
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1438,11 +1566,33 @@ test("persona docs index preserves hand notes while refreshing generated catalog
   assert.match(createdContent, /`examples\/example\.md`/);
 });
 
+test("persona argument parsers share shell-like quote handling", async () => {
+  assert.deepEqual(parsePersonaIndexArgs('"docs/workstreams/brand assets/"'), {
+    all: false,
+    target: "docs/workstreams/brand assets/",
+  });
+  assert.equal(
+    parsePersonaNewArgs('Brand --description "Brand reviewer"').options.description,
+    "Brand reviewer",
+  );
+  assert.deepEqual(parsePersonaInitArgs("--from 'init-data/my layer.yaml'"), {
+    mode: "apply",
+    from: "init-data/my layer.yaml",
+  });
+
+  assert.throws(() => parsePersonaIndexArgs('"unfinished'), /persona index arguments/);
+  assert.throws(() => parsePersonaNewArgs('Brand --description "unfinished'), /persona new arguments/);
+  assert.throws(() => parsePersonaInitArgs('--from "unfinished'), /persona init arguments/);
+
+  const { tokenizeArgs } = await import("../src/persona/command-args.js");
+  assert.deepEqual(tokenizeArgs('one "" two', "unterminated"), ["one", "", "two"]);
+});
+
 test("formats doctor report with actionable sections", async () => {
   const root = await createWorkspace();
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1510,7 +1660,7 @@ String primary prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1542,7 +1692,7 @@ Brand prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1565,7 +1715,7 @@ Backup generalist prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1590,7 +1740,7 @@ Backup generalist prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1620,7 +1770,7 @@ Worker prompt.
   const project = await discoverPersonaProject(root);
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1644,7 +1794,7 @@ Escape prompt.
 
   const result = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -1739,6 +1889,19 @@ Prompt body.
   assert.deepEqual(parsed.frontmatter.skills, ["shared-skill", "brand-skill"]);
   assert.deepEqual(parsed.frontmatter.consults, ["guideline", "launch"]);
   assert.deepEqual(parsed.frontmatter.tags, ["brand"]);
+});
+
+test("schema owns persona role and skill-name policy", async () => {
+  const schema = await readFile(path.join(process.cwd(), "src/persona/schema.js"), "utf8");
+  const doctor = await readFile(path.join(process.cwd(), "src/persona/doctor.js"), "utf8");
+  const manifest = await readFile(path.join(process.cwd(), "src/persona/init-manifest.js"), "utf8");
+  const scaffold = await readFile(path.join(process.cwd(), "src/persona/scaffold.js"), "utf8");
+
+  assert.match(schema, /isAuthorablePersonaRole/);
+  assert.match(schema, /isPathLikeSkillName/);
+  assert.doesNotMatch(doctor, /function looksLikePath/);
+  assert.doesNotMatch(manifest, /function looksLikePath|const VALID_ROLES/);
+  assert.doesNotMatch(scaffold, /const VALID_ROLES/);
 });
 
 test("resolveAgentScope merges baseline and selected agent only", async () => {
@@ -2354,6 +2517,26 @@ test("roundtable progress reports long quiet periods without a cancellation coun
   assert.doesNotMatch(text, /cancelling|countdown/i);
 });
 
+test("roundtable process details summarize completed and failed steps", () => {
+  const details = createRoundtableProcessDetails(
+    { roster: [{ name: "brand" }], generalist: { name: "generalist" } },
+    { result: { details: { results: [{ status: "completed" }, { status: "failed" }] } } },
+    {
+      elapsedMs: 2_000,
+      toolCount: 1,
+      turns: 2,
+      categories: {},
+      sources: 0,
+      recoverableErrors: 0,
+    },
+  );
+
+  assert.equal(details.expectedSteps, 3);
+  assert.equal(details.completedSteps, 1);
+  assert.equal(details.failedSteps, 1);
+  assert.match(formatRoundtableProcessLine(details), /1\/3 steps complete/);
+});
+
 test("extractRoundtableAnswer selects only the current moderator synthesis and ignores intercom receipts", async () => {
   const answer = await extractRoundtableAnswer({
     result: {
@@ -2384,6 +2567,31 @@ test("extractRoundtableAnswer selects only the current moderator synthesis and i
   assert.equal(missing.source, "missing");
   assert.match(missing.text, /no moderator synthesis/i);
   assert.doesNotMatch(missing.text, /private-request-id|private-run-id|artifact/i);
+});
+
+test("consult may use bridge error text while roundtable keeps it private", async () => {
+  assert.deepEqual(await extractConsultAnswer({ errorText: "consult failed" }), {
+    text: "consult failed",
+    source: "bridge",
+  });
+
+  const roundtable = await extractRoundtableAnswer({
+    errorText: "private /tmp/roundtable error",
+    result: { details: { results: [] } },
+  }, "generalist");
+  assert.equal(roundtable.source, "missing");
+  assert.doesNotMatch(roundtable.text, /private|\/tmp/);
+});
+
+test("consult and roundtable share answer-value helpers", async () => {
+  const consult = await readFile(path.join(process.cwd(), "src/persona/consult.js"), "utf8");
+  const roundtable = await readFile(path.join(process.cwd(), "src/persona/roundtable.js"), "utf8");
+
+  assert.match(consult, /from "\.\/answer-values\.js"/);
+  assert.match(roundtable, /from "\.\/answer-values\.js"/);
+  for (const source of [consult, roundtable]) {
+    assert.doesNotMatch(source, /function (childResults|stringifyAnswerValue|normalizeAnswerText|isIntercomReceiptText|requireText)\(/);
+  }
 });
 
 test("roundtable failure output reports only current phase and agent status", async () => {
@@ -2907,7 +3115,7 @@ test("createPersonaProjectScaffold creates minimal baseline and primary generali
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -3021,6 +3229,20 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   );
 });
 
+test("shipped init-data fixtures retain their intended validation state", async () => {
+  const example = await planPersonaInitFromManifest(
+    process.cwd(),
+    "init-data/[EXAMPLE]business-operating-layer.yaml",
+  );
+  assert.equal(example.projectName, "business-operating-layer");
+  assert.ok(example.actions.length > 10);
+
+  await assert.rejects(
+    () => planPersonaInitFromManifest(process.cwd(), "init-data/_template.yaml"),
+    /unresolved template placeholders/,
+  );
+});
+
 test("manifest validation rejects malformed booleans lists models and doc contents", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-persona-invalid-manifest-"));
   const valid = starterInitManifest();
@@ -3107,7 +3329,7 @@ test("manifest init plans applies and reports status for a starter layer", async
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -3238,7 +3460,7 @@ Shared pilot context.
 
   const doctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });
@@ -3303,7 +3525,7 @@ Shared pilot context.
 
   const duplicateDoctor = await runDoctor(root, {
     dependencyStatus: {
-      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+      piSubagents: { ok: true, version: "0.34.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
     },
   });

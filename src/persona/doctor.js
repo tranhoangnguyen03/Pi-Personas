@@ -1,4 +1,4 @@
-import { copyFile, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,7 +10,7 @@ import {
 } from "./agents.js";
 import { inspectDocPath } from "./doc-index.js";
 import { findPersonaTemplatePlaceholders } from "./init-manifest.js";
-import { validatePersonaSchema } from "./schema.js";
+import { isPathLikeSkillName, validatePersonaSchema } from "./schema.js";
 
 const RUNTIME_PACKAGES = {
   piSubagents: {
@@ -21,7 +21,7 @@ const RUNTIME_PACKAGES = {
   },
 };
 
-export const PI_SUBAGENTS_MANAGED_DELIVERY_VERSION = "0.35.0";
+export const PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION = "0.34.0";
 
 export async function runDoctor(root, options = {}) {
   const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
@@ -236,9 +236,20 @@ async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalK
 
   const backupPath = `${settings.path}.pi-personas.bak`;
   const temporaryPath = `${settings.path}.${process.pid}.tmp`;
+  const mode = (await stat(settings.path)).mode & 0o777;
   await copyFile(settings.path, backupPath);
-  await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, "utf8");
-  await rename(temporaryPath, settings.path);
+  await chmod(backupPath, mode);
+  await rm(temporaryPath, { force: true });
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, {
+      encoding: "utf8",
+      mode,
+    });
+    await chmod(temporaryPath, mode);
+    await rename(temporaryPath, settings.path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
   repairs.push({
     scope: settings.scope,
     settingsPath: settings.path,
@@ -277,10 +288,10 @@ function collectRuntimePackageIssue(dependency, spec, issues) {
       message: `${spec.name} installed but not configured in Pi settings; run \`pi install ${dependency.packageSource ?? spec.source}\``,
     });
   }
-  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_MANAGED_DELIVERY_VERSION)) {
+  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION)) {
     issues.push({
       severity: "warning",
-      message: `${spec.name} ${dependency.version ?? "unknown"} lacks managed round-table result delivery; upgrade to >=${PI_SUBAGENTS_MANAGED_DELIVERY_VERSION}`,
+      message: `${spec.name} ${dependency.version ?? "unknown"} is older than the supported round-table runtime; upgrade to >=${PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION}`,
     });
   }
 }
@@ -295,7 +306,7 @@ function runtimeDependencyProblem(dependency, spec, minimumVersion) {
   if (!dependency?.ok) return `${spec.name} is missing at ${dependency?.path ?? "unknown"}`;
   if (dependency.configured === false) return `${spec.name} is installed but not configured in Pi settings`;
   if (minimumVersion && !versionAtLeast(dependency.version, minimumVersion)) {
-    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; managed round-tables require >=${minimumVersion}`;
+    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; round-tables require >=${minimumVersion}`;
   }
   return "";
 }
@@ -434,7 +445,7 @@ function collectSkillsIssues(project, issues) {
   }
 
   for (const entry of skillEntries) {
-    if (looksLikePath(entry.skill)) {
+    if (isPathLikeSkillName(entry.skill)) {
       issues.push({
         severity: "warning",
         file: entry.owner,
@@ -442,10 +453,6 @@ function collectSkillsIssues(project, issues) {
       });
     }
   }
-}
-
-function looksLikePath(value) {
-  return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
 }
 
 function collectLegacyMetadataIssues(project, issues) {

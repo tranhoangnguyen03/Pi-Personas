@@ -1,4 +1,5 @@
 const ALLOWED_ROLES = new Set(["generalist", "specialist", "runtime"]);
+const AUTHORABLE_ROLES = new Set(["generalist", "specialist"]);
 const AGENT_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const LIST_FIELDS = ["docs", "skills", "tools", "consults", "tags"];
 const CONTROL_AGENT_FIELDS = ["name", "description", "role", "primary", "model"];
@@ -68,6 +69,19 @@ export function isDirectPersonaCommandName(value) {
   return isSafeAgentName(value) && !DIRECT_PERSONA_RESERVED_NAMES.has(value);
 }
 
+export function isPersonaRole(value) {
+  return typeof value === "string" && ALLOWED_ROLES.has(value);
+}
+
+export function isAuthorablePersonaRole(value) {
+  return typeof value === "string" && AUTHORABLE_ROLES.has(value);
+}
+
+export function isPathLikeSkillName(value) {
+  return typeof value === "string"
+    && (/[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md"));
+}
+
 function validateControlFile(file, issues) {
   const raw = rawFrontmatter(file);
   if (Object.hasOwn(raw, "name") && Object.hasOwn(raw, "description")) {
@@ -117,7 +131,7 @@ function validateAgentFile(file, issues) {
   }
 
   const role = raw.role ?? "specialist";
-  if (typeof role !== "string" || !ALLOWED_ROLES.has(role)) {
+  if (!isPersonaRole(role)) {
     issues.push({
       severity: "error",
       file: file.relativePath,

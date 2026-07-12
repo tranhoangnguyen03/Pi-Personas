@@ -1,5 +1,12 @@
 import { readFile } from "node:fs/promises";
 
+import {
+  childResults,
+  isIntercomReceiptText,
+  normalizeAnswerText,
+  requireText,
+  stringifyAnswerValue,
+} from "./answer-values.js";
 import { assertUniqueAgentNames, discoverPersonaProject, findPrimaryGeneralist } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
 import { buildScopedSubagentStep, formatDocReadPreamble } from "./runtime.js";
@@ -11,7 +18,7 @@ const ADVISORY_ACCEPTANCE = {
 };
 
 export async function resolveRoundtableLaunchRequest(root, input = {}) {
-  const query = requireText(input.query, "roundtable query");
+  const query = requireText(input.query, "roundtable query is required");
   const context = input.context === "fork" ? "fork" : "fresh";
   const project = await discoverPersonaProject(root);
   assertUniqueAgentNames(project);
@@ -44,7 +51,6 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
       clarify: false,
       agentScope: "both",
       context,
-      resultDelivery: "response-only",
       control: {
         enabled: false,
         notifyOn: [],
@@ -55,7 +61,7 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
 }
 
 export async function resolveRoundtableSelectionRequest(root, input = {}) {
-  const query = requireText(input.query, "roundtable query");
+  const query = requireText(input.query, "roundtable query is required");
   const context = input.context === "fork" ? "fork" : "fresh";
   const project = await discoverPersonaProject(root);
   assertUniqueAgentNames(project);
@@ -281,8 +287,8 @@ function validateSelections(project, value) {
     if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
       throw new Error(`roundtable selection[${index}] must be an object`);
     }
-    const name = requireText(selection.name, `roundtable selection[${index}].name`);
-    const reason = requireText(selection.reason, `roundtable selection[${index}].reason`);
+    const name = requireText(selection.name, `roundtable selection[${index}].name is required`);
+    const reason = requireText(selection.reason, `roundtable selection[${index}].reason is required`);
     const agent = specialists.get(name);
     if (!agent) throw new Error(`roundtable selected unknown specialist: ${name}`);
     if (seen.has(name)) throw new Error(`roundtable selected duplicate specialist: ${name}`);
@@ -299,21 +305,7 @@ function formatValues(values = []) {
   return values.length > 0 ? values.join(", ") : "none";
 }
 
-function childResults(response) {
-  const results = response?.result?.details?.results;
-  return Array.isArray(results) ? results : [];
-}
-
-function stringifyAnswerValue(value) {
-  if (typeof value === "string") return value.trim() || undefined;
-  if (value === undefined || value === null) return undefined;
-  return JSON.stringify(value, null, 2);
-}
-
-function normalizeAnswerText(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "(no output)";
-}
-
+// Round-table output must not expose bridge errorText, run ids, or artifact paths.
 function bridgeResponseText(response) {
   const content = response?.result?.content;
   if (typeof content === "string") return content.trim();
@@ -325,21 +317,8 @@ function bridgeResponseText(response) {
     .trim();
 }
 
-function isIntercomReceiptText(text) {
-  const lines = text.trim().split(/\r?\n/).map((line) => line.trim());
-  return /^Delivered (?:single subagent result|parallel subagent results|chain subagent results) via intercom\.$/.test(lines[0] ?? "")
-    && lines.includes("Full grouped output was sent over intercom.");
-}
-
 function roundtableFailurePhase(rosterSize, resultCount) {
   if (resultCount <= rosterSize) return "Round 1";
   if (resultCount <= rosterSize * 2) return "Round 2";
   return "moderator synthesis";
-}
-
-function requireText(value, field) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${field} is required`);
-  }
-  return value.trim();
 }

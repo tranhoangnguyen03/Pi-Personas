@@ -211,10 +211,10 @@ selected roster gathers independent positions and revises after peer reveal,
 then the primary generalist synthesizes the answer. Selection failure is
 explicit and never falls back to a lexical heuristic.
 
-The round-table bridge uses response-only result delivery. The user sees live
-native progress and one managed moderator synthesis, never the child runtime's
-grouped intercom receipt, artifact paths, session paths, or a receipt-triggered
-second verdict.
+The round-table uses `pi-subagents`' in-process slash bridge. The user sees live
+native progress and one moderator synthesis, never the child runtime's grouped
+intercom receipt, artifact paths, session paths, or a receipt-triggered second
+verdict.
 
 The round-table tool makes its process inspectable without streaming specialist
 opinions: it shows the delegated query, context policy, selected roster and
