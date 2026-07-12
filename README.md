@@ -30,13 +30,14 @@ require `pi-subagents` to be installed and visible to Pi:
 pi install npm:pi-subagents
 ```
 
-Managed round-table delivery requires `pi-subagents` 0.35.0 or newer. Doctor
-warns about older runtimes, and `/persona-roundtable` refuses to start rather
-than expose raw child results, run IDs, or artifact paths.
+Pi Persona supports `pi-subagents` 0.34.0 or newer. Doctor warns about older
+runtimes, and `/persona-roundtable` refuses to start on an unsupported version.
+Round-table results return through the package's in-process slash bridge; Pi
+Persona exposes the moderator synthesis without raw run IDs or artifact paths.
 
 Installing this repository's npm dependencies is not enough. `pi-subagents`
 must be configured as a Pi package so Pi can expose its child-session behavior.
-Its native supervisor and result channels are sufficient; external
+Its native supervisor and slash-bridge result channels are sufficient; external
 `pi-intercom` is not required.
 
 Direct persona activation can still work without that child-runtime package,
@@ -125,11 +126,11 @@ Run an explicit multi-persona workflow:
 The command activates the primary generalist, which selects one to five relevant
 specialists with a schema-validated rationale and calls `persona_roundtable`
 exactly once. That single child workflow runs both discussion rounds and the
-primary-generalist synthesis over only the selected roster. Its bridge request
-uses response-only delivery so the clean tool result is the sole completion
-message in the parent conversation. The tool panel discloses the query, context,
-selected specialists, reasons, three-stage process, per-persona status, current
-activity, next step, and a compact execution summary.
+primary-generalist synthesis over only the selected roster. Its in-process
+bridge returns the clean tool result directly to Pi Persona so it is the sole
+completion message in the parent conversation. The tool panel discloses the
+query, context, selected specialists, reasons, three-stage process, per-persona
+status, current activity, next step, and a compact execution summary.
 
 For richer project setup, use assisted manifest drafting:
 

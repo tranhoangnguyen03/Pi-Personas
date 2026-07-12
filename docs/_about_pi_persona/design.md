@@ -181,12 +181,12 @@ one `pi-subagents` bridge request containing:
 - reveal and revise step
 - moderator synthesis
 
-The internal bridge request sets `resultDelivery: "response-only"`. This keeps
-native execution, progress, cancellation, artifacts, and child coordination,
-but suppresses the foreground grouped intercom result that would otherwise
-inject raw child output and trigger another parent turn. This capability
-requires `pi-subagents` 0.35.0 or newer and is intentionally absent from the
-model-facing subagent schema.
+The request uses `pi-subagents`' in-process `subagent:slash:*` event bridge.
+That bridge keeps native execution, progress, cancellation, artifacts, and
+child coordination while returning the result directly to Pi Persona instead
+of routing slash-command output through the parent chat. Pi Persona supports
+this integration against `pi-subagents` 0.34.0 or newer; it does not send
+private, non-schema delivery parameters.
 
 Every chain task is explicitly advisory and read-only, so analysis is not
 rejected for failing to edit files. The top-level task repeats the no-edit

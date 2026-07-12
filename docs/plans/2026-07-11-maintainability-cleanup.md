@@ -712,7 +712,7 @@ Expected:
 
 **Step 3: Run focused manual runtime smoke**
 
-In a disposable Pi project with `npm:pi-personas` and `npm:pi-subagents >=0.35.0` loaded:
+In a disposable Pi project with `npm:pi-personas` and `npm:pi-subagents >=0.34.0` loaded:
 
 1. Run `/persona init`, `/persona doctor`, and `/persona-list`.
 2. Activate `/generalist`, send a follow-up, then `/persona clear`.

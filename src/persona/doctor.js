@@ -21,7 +21,7 @@ const RUNTIME_PACKAGES = {
   },
 };
 
-export const PI_SUBAGENTS_MANAGED_DELIVERY_VERSION = "0.35.0";
+export const PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION = "0.34.0";
 
 export async function runDoctor(root, options = {}) {
   const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
@@ -288,10 +288,10 @@ function collectRuntimePackageIssue(dependency, spec, issues) {
       message: `${spec.name} installed but not configured in Pi settings; run \`pi install ${dependency.packageSource ?? spec.source}\``,
     });
   }
-  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_MANAGED_DELIVERY_VERSION)) {
+  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION)) {
     issues.push({
       severity: "warning",
-      message: `${spec.name} ${dependency.version ?? "unknown"} lacks managed round-table result delivery; upgrade to >=${PI_SUBAGENTS_MANAGED_DELIVERY_VERSION}`,
+      message: `${spec.name} ${dependency.version ?? "unknown"} is older than the supported round-table runtime; upgrade to >=${PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION}`,
     });
   }
 }
@@ -306,7 +306,7 @@ function runtimeDependencyProblem(dependency, spec, minimumVersion) {
   if (!dependency?.ok) return `${spec.name} is missing at ${dependency?.path ?? "unknown"}`;
   if (dependency.configured === false) return `${spec.name} is installed but not configured in Pi settings`;
   if (minimumVersion && !versionAtLeast(dependency.version, minimumVersion)) {
-    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; managed round-tables require >=${minimumVersion}`;
+    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; round-tables require >=${minimumVersion}`;
   }
   return "";
 }
