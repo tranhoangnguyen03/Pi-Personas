@@ -1477,6 +1477,28 @@ test("persona docs index preserves hand notes while refreshing generated catalog
   assert.match(createdContent, /`examples\/example\.md`/);
 });
 
+test("persona argument parsers share shell-like quote handling", async () => {
+  assert.deepEqual(parsePersonaIndexArgs('"docs/workstreams/brand assets/"'), {
+    all: false,
+    target: "docs/workstreams/brand assets/",
+  });
+  assert.equal(
+    parsePersonaNewArgs('Brand --description "Brand reviewer"').options.description,
+    "Brand reviewer",
+  );
+  assert.deepEqual(parsePersonaInitArgs("--from 'init-data/my layer.yaml'"), {
+    mode: "apply",
+    from: "init-data/my layer.yaml",
+  });
+
+  assert.throws(() => parsePersonaIndexArgs('"unfinished'), /persona index arguments/);
+  assert.throws(() => parsePersonaNewArgs('Brand --description "unfinished'), /persona new arguments/);
+  assert.throws(() => parsePersonaInitArgs('--from "unfinished'), /persona init arguments/);
+
+  const { tokenizeArgs } = await import("../src/persona/command-args.js");
+  assert.deepEqual(tokenizeArgs('one "" two', "unterminated"), ["one", "", "two"]);
+});
+
 test("formats doctor report with actionable sections", async () => {
   const root = await createWorkspace();
   const result = await runDoctor(root, {

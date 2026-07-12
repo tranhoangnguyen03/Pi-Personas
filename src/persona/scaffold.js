@@ -5,6 +5,7 @@ import {
   discoverPersonaProject,
   resolveWorkspacePathForAccess,
 } from "./agents.js";
+import { tokenizeArgs } from "./command-args.js";
 import { formatYamlField, formatYamlScalar } from "./frontmatter.js";
 import {
   isDirectPersonaCommandName,
@@ -56,7 +57,7 @@ skill names, not file paths.
 }
 
 export function parsePersonaNewArgs(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = tokenizeArgs(args, "unterminated quoted value in /persona new arguments");
   const nameTokens = [];
   const options = {};
   let optionsStarted = false;
@@ -338,50 +339,4 @@ function parseOptionToken(token) {
     key: raw.slice(0, equalsIndex),
     value: raw.slice(equalsIndex + 1),
   };
-}
-
-function tokenizeArgs(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let tokenStarted = false;
-
-  for (const char of String(input)) {
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      tokenStarted = true;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      tokenStarted = true;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (tokenStarted) {
-        tokens.push(current);
-        current = "";
-        tokenStarted = false;
-      }
-      continue;
-    }
-
-    current += char;
-    tokenStarted = true;
-  }
-
-  if (quote) {
-    throw new Error("unterminated quoted value in /persona new arguments");
-  }
-  if (tokenStarted) {
-    tokens.push(current);
-  }
-
-  return tokens;
 }

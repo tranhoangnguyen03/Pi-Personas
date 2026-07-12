@@ -6,6 +6,7 @@ import {
   resolveWorkspacePath,
   resolveWorkspacePathForAccess,
 } from "./agents.js";
+import { tokenizeArgs } from "./command-args.js";
 import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
@@ -27,7 +28,7 @@ export function findPersonaTemplatePlaceholders(value) {
 }
 
 export function parsePersonaInitArgs(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = tokenizeArgs(args, "unterminated quoted value in /persona init arguments");
   if (tokens.length === 0) return { mode: "basic" };
   if (tokens[0] === "draft") {
     const out = readOption(tokens.slice(1), "out");
@@ -519,32 +520,6 @@ function readOption(tokens, key) {
     if (token === `--${key}`) return tokens[index + 1];
   }
   return "";
-}
-
-function tokenizeArgs(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  for (const char of String(input).trim()) {
-    if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) tokens.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (quote) throw new Error("unterminated quoted value in /persona init arguments");
-  if (current) tokens.push(current);
-  return tokens;
 }
 
 function normalizeList(value, label) {

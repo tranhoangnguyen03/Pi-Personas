@@ -5,6 +5,7 @@ import {
   discoverPersonaProject,
   resolveWorkspacePathForAccess,
 } from "./agents.js";
+import { tokenizeArgs } from "./command-args.js";
 import { uniqueStrings } from "./frontmatter.js";
 
 export const DOC_INDEX_FILE = "_index.md";
@@ -132,7 +133,7 @@ export function formatDocsIndexReport(result) {
 }
 
 export function parsePersonaIndexArgs(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = tokenizeArgs(args, "unterminated quote in /persona index arguments");
   if (tokens.length === 0) {
     return { all: true };
   }
@@ -345,50 +346,4 @@ function relativeToDocPath(docPath, filePath) {
 
 function toWorkspacePath(root, filePath) {
   return path.relative(root, filePath).split(path.sep).join("/");
-}
-
-function tokenizeArgs(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let tokenStarted = false;
-
-  for (const char of String(input)) {
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      tokenStarted = true;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      tokenStarted = true;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (tokenStarted) {
-        tokens.push(current);
-        current = "";
-        tokenStarted = false;
-      }
-      continue;
-    }
-
-    current += char;
-    tokenStarted = true;
-  }
-
-  if (quote) {
-    throw new Error("unterminated quote in /persona index arguments");
-  }
-  if (tokenStarted) {
-    tokens.push(current);
-  }
-
-  return tokens;
 }
