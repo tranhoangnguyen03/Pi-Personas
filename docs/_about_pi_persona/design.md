@@ -8,13 +8,18 @@ the tests.
 
 `extensions/pi-persona.ts` is glue. It registers commands and tools, manages
 active persona state through Pi hooks, updates extension status, calls pure
-persona modules, and formats command output for Pi.
+persona modules, and formats command output for Pi. It is checked with strict
+TypeScript so Pi lifecycle, tool-update, and renderer boundaries stay explicit.
 
 `src/persona/index.js` is the public module surface for the extension wrapper.
 
 `src/persona/agents.js`, `frontmatter.js`, and `schema.js` handle agent
 discovery, raw-plus-normalized frontmatter parsing, strict field validation,
-launchability, and physical workspace path containment.
+launchability, physical workspace path containment, accepted persona roles,
+authorable roles, and path-like skill-name policy.
+
+`src/persona/command-args.js` owns shared shell-like tokenization for persona
+slash-command arguments.
 
 `src/persona/resolver.js` builds resolved persona scopes from baseline,
 selected agent, declared docs, native skills, and known persona roster.
@@ -25,11 +30,16 @@ persona commands.
 `src/persona/consult.js` owns semantic consult formatting, consultant launch
 requests, answer extraction, and provenance.
 
+`src/persona/answer-values.js` owns shared child-result value normalization.
+Consult and round-table modules retain their distinct result precedence and
+privacy policies, including round-table suppression of private bridge errors.
+
 `src/persona/subagent-bridge.js` is transport only. It emits a bridge request,
 waits for the matching response, forwards progress, and returns raw bridge data.
 
-`src/persona/progress.js` turns observable child events into the live consult
-summary shown in the streaming `[pi-persona]` tool box.
+`src/persona/progress.js` turns observable child events into live consult and
+round-table summaries shown in the streaming `[pi-persona]` tool box and owns
+the pure final round-table process receipt.
 
 `src/persona/roundtable.js` builds the explicit multi-persona workflow.
 
@@ -247,6 +257,10 @@ workspace. Users can inspect that roster with `/persona-list`.
 ## Documentation And Test Strategy
 
 Tests should protect the public runtime boundaries:
+
+- syntax checks discover new JavaScript modules automatically
+- the TypeScript extension passes strict type checking without explicit `any`
+- shared parser, schema-policy, and answer-value ownership stays centralized
 
 - package manifest exposes the extension
 - direct persona commands activate the active chat instead of child runs
