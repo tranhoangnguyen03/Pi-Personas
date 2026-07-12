@@ -284,6 +284,20 @@ test("package manifest exposes Pi Persona as a Pi extension package", async () =
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-persona.ts"]);
 });
 
+test("syntax checker discovers nested JavaScript files", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-syntax-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeText(path.join(root, "valid.js"), "export const ok = true;\n");
+  await writeText(path.join(root, "nested/broken.js"), "function {\n");
+
+  await assert.rejects(
+    () => execFileAsync(process.execPath, ["scripts/check-syntax.js", root], {
+      cwd: process.cwd(),
+    }),
+    /broken\.js/,
+  );
+});
+
 test("package tarball excludes local runtime state and tests", async () => {
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
     cwd: process.cwd(),

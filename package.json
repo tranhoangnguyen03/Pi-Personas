@@ -41,7 +41,8 @@
     "src/"
   ],
   "scripts": {
-    "check": "node --check src/persona/agents.js && node --check src/persona/consult.js && node --check src/persona/doc-index.js && node --check src/persona/doctor.js && node --check src/persona/frontmatter.js && node --check src/persona/index.js && node --check src/persona/init-manifest.js && node --check src/persona/launch.js && node --check src/persona/pi-output.js && node --check src/persona/progress.js && node --check src/persona/resolver.js && node --check src/persona/roundtable.js && node --check src/persona/runtime.js && node --check src/persona/scaffold.js && node --check src/persona/schema.js && node --check src/persona/subagent-bridge.js && node --experimental-strip-types --check extensions/pi-persona.ts",
+    "check:syntax": "node scripts/check-syntax.js && node --experimental-strip-types --check extensions/pi-persona.ts",
+    "check": "npm run check:syntax",
     "test": "npm run check && npm run test:unit && npm run test:smoke",
     "test:unit": "node --test test/persona-core.test.js",
     "test:smoke": "node --test test/pi-rpc-smoke.test.js"
