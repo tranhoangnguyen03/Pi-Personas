@@ -53,7 +53,10 @@ export {
   renderAgentScaffold,
 } from "./scaffold.js";
 export {
+  isAuthorablePersonaRole,
   isDirectPersonaCommandName,
+  isPathLikeSkillName,
+  isPersonaRole,
   isSafeAgentName,
   validatePersonaFile,
   validatePersonaSchema,

@@ -10,8 +10,8 @@ import { tokenizeArgs } from "./command-args.js";
 import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
+import { isAuthorablePersonaRole, isPathLikeSkillName } from "./schema.js";
 
-const VALID_ROLES = new Set(["generalist", "specialist"]);
 const TEMPLATE_PLACEHOLDERS = [
   "Add the user's business facts, priorities, constraints, audience, products, services, channels, and recurring decisions here.",
   "Replace this with the specialist's operating notes.",
@@ -383,7 +383,7 @@ function normalizeAgent(raw, label, root) {
     throw new Error(`${label}: name must already be command-safe: ${normalizeAgentName(name)}`);
   }
   const role = String(raw.role).trim();
-  if (!VALID_ROLES.has(role)) throw new Error(`${label}: role must be generalist or specialist`);
+  if (!isAuthorablePersonaRole(role)) throw new Error(`${label}: role must be generalist or specialist`);
   if (Object.hasOwn(raw, "primary") && typeof raw.primary !== "boolean") {
     throw new Error(`${label}: primary must be true or false`);
   }
@@ -430,7 +430,7 @@ function normalizePathList(value, label, root) {
 
 function normalizeSkillList(value, label) {
   return normalizeList(value, label).map((entry) => {
-    if (looksLikePath(entry)) {
+    if (isPathLikeSkillName(entry)) {
       throw new Error(`${label}: skills must be native pi-subagents skill names, not paths: ${entry}`);
     }
     return entry;
@@ -536,10 +536,6 @@ function normalizeList(value, label) {
     }
     return item.trim();
   });
-}
-
-function looksLikePath(value) {
-  return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
 }
 
 function isRecord(value) {

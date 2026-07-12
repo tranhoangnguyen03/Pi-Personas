@@ -10,7 +10,7 @@ import {
 } from "./agents.js";
 import { inspectDocPath } from "./doc-index.js";
 import { findPersonaTemplatePlaceholders } from "./init-manifest.js";
-import { validatePersonaSchema } from "./schema.js";
+import { isPathLikeSkillName, validatePersonaSchema } from "./schema.js";
 
 const RUNTIME_PACKAGES = {
   piSubagents: {
@@ -445,7 +445,7 @@ function collectSkillsIssues(project, issues) {
   }
 
   for (const entry of skillEntries) {
-    if (looksLikePath(entry.skill)) {
+    if (isPathLikeSkillName(entry.skill)) {
       issues.push({
         severity: "warning",
         file: entry.owner,
@@ -453,10 +453,6 @@ function collectSkillsIssues(project, issues) {
       });
     }
   }
-}
-
-function looksLikePath(value) {
-  return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
 }
 
 function collectLegacyMetadataIssues(project, issues) {

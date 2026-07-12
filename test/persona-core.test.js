@@ -1802,6 +1802,19 @@ Prompt body.
   assert.deepEqual(parsed.frontmatter.tags, ["brand"]);
 });
 
+test("schema owns persona role and skill-name policy", async () => {
+  const schema = await readFile(path.join(process.cwd(), "src/persona/schema.js"), "utf8");
+  const doctor = await readFile(path.join(process.cwd(), "src/persona/doctor.js"), "utf8");
+  const manifest = await readFile(path.join(process.cwd(), "src/persona/init-manifest.js"), "utf8");
+  const scaffold = await readFile(path.join(process.cwd(), "src/persona/scaffold.js"), "utf8");
+
+  assert.match(schema, /isAuthorablePersonaRole/);
+  assert.match(schema, /isPathLikeSkillName/);
+  assert.doesNotMatch(doctor, /function looksLikePath/);
+  assert.doesNotMatch(manifest, /function looksLikePath|const VALID_ROLES/);
+  assert.doesNotMatch(scaffold, /const VALID_ROLES/);
+});
+
 test("resolveAgentScope merges baseline and selected agent only", async () => {
   const root = await createWorkspace();
 
@@ -2445,6 +2458,31 @@ test("extractRoundtableAnswer selects only the current moderator synthesis and i
   assert.equal(missing.source, "missing");
   assert.match(missing.text, /no moderator synthesis/i);
   assert.doesNotMatch(missing.text, /private-request-id|private-run-id|artifact/i);
+});
+
+test("consult may use bridge error text while roundtable keeps it private", async () => {
+  assert.deepEqual(await extractConsultAnswer({ errorText: "consult failed" }), {
+    text: "consult failed",
+    source: "bridge",
+  });
+
+  const roundtable = await extractRoundtableAnswer({
+    errorText: "private /tmp/roundtable error",
+    result: { details: { results: [] } },
+  }, "generalist");
+  assert.equal(roundtable.source, "missing");
+  assert.doesNotMatch(roundtable.text, /private|\/tmp/);
+});
+
+test("consult and roundtable share answer-value helpers", async () => {
+  const consult = await readFile(path.join(process.cwd(), "src/persona/consult.js"), "utf8");
+  const roundtable = await readFile(path.join(process.cwd(), "src/persona/roundtable.js"), "utf8");
+
+  assert.match(consult, /from "\.\/answer-values\.js"/);
+  assert.match(roundtable, /from "\.\/answer-values\.js"/);
+  for (const source of [consult, roundtable]) {
+    assert.doesNotMatch(source, /function (childResults|stringifyAnswerValue|normalizeAnswerText|isIntercomReceiptText|requireText)\(/);
+  }
 });
 
 test("roundtable failure output reports only current phase and agent status", async () => {

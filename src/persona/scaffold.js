@@ -8,13 +8,13 @@ import {
 import { tokenizeArgs } from "./command-args.js";
 import { formatYamlField, formatYamlScalar } from "./frontmatter.js";
 import {
+  isAuthorablePersonaRole,
   isDirectPersonaCommandName,
   isSafeAgentName,
 } from "./schema.js";
 
 const ALLOWED_OPTIONS = new Set(["role", "description", "docs", "skills"]);
 const LIST_OPTIONS = new Set(["docs", "skills"]);
-const VALID_ROLES = new Set(["generalist", "specialist"]);
 
 export function normalizeAgentName(input) {
   const normalized = String(input)
@@ -291,7 +291,7 @@ function titleFromName(input) {
 
 function normalizeRole(value) {
   const role = String(value).trim().toLowerCase();
-  if (!VALID_ROLES.has(role)) {
+  if (!isAuthorablePersonaRole(role)) {
     throw new Error("role must be generalist or specialist");
   }
   return role;
