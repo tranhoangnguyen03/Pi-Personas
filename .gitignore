@@ -3,4 +3,6 @@ node_modules/
 .pi/
 .pi-subagents/
 .sc/
+docs/plans/
+docs/superpowers/
 *.tgz
