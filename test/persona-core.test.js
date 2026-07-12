@@ -320,6 +320,8 @@ test("package tarball excludes local runtime state and tests", async () => {
   assert.ok(files.includes("RELEASING.md"));
   assert.ok(files.includes("docs/_about_pi_persona/design.md"));
   assert.ok(files.includes("extensions/pi-persona.ts"));
+  assert.ok(files.includes("init-data/_template.yaml"));
+  assert.ok(files.includes("init-data/[EXAMPLE]business-operating-layer.yaml"));
   assert.ok(files.includes("src/persona/index.js"));
   assert.equal(files.some((filePath) => filePath.startsWith("docs/superpowers/")), false);
   assert.deepEqual(forbidden, []);
@@ -601,6 +603,85 @@ test("persona consult requires and matches the active requester", async () => {
   const mismatch = await tool.execute("consult", params, undefined, undefined, harness.ctx);
   assert.equal(mismatch.isError, true);
   assert.match(mismatch.content[0].text, /requester must match active persona 'generalist'/);
+});
+
+test("successful consult runs through the extension adapter", async (t) => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-consult-runtime-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ name: "pi-subagents", version: "0.35.0" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(async () => {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    await rm(root, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+  });
+
+  const requests = [];
+  const progressUpdates = [];
+  const harness = await createExtensionHarness(root, {
+    onSubagentRequest(request, events) {
+      requests.push(request);
+      events.emit("subagent:slash:started", { requestId: request.requestId });
+      events.emit("subagent:slash:update", {
+        requestId: request.requestId,
+        progress: [{
+          index: 0,
+          agent: "guideline",
+          status: "running",
+          currentTool: "read",
+          recentTools: [],
+          toolCount: 1,
+          turnCount: 1,
+        }],
+      });
+      events.emit("subagent:slash:response", {
+        requestId: request.requestId,
+        isError: false,
+        result: {
+          content: [{
+            type: "text",
+            text: "Delivered single subagent result via intercom.\nFull grouped output was sent over intercom.",
+          }],
+          details: {
+            results: [{ agent: "guideline", finalOutput: "Guideline approves with one revision." }],
+          },
+        },
+      });
+    },
+  });
+
+  await harness.handlers.get("session_start")(null, harness.ctx);
+  await harness.commands.get("brand").handler("", harness.ctx);
+  const result = await harness.tools.get("persona_consult").execute(
+    "consult",
+    {
+      requester: "brand",
+      consultant: "guideline",
+      question: "Review the proposed brand direction.",
+      summary: "The brand persona needs a guideline check.",
+    },
+    undefined,
+    (update) => progressUpdates.push(update),
+    harness.ctx,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].params.agent, "guideline");
+  assert.equal(requests[0].params.context, "fresh");
+  assert.ok(requests[0].params.reads.includes("docs/shared/company.md"));
+  assert.ok(requests[0].params.reads.includes("docs/workstreams/guideline/rules.md"));
+  assert.deepEqual(requests[0].params.skill, ["shared-skill", "guideline-skill"]);
+  assert.ok(progressUpdates.some((update) => update.content[0].text.includes("Consulting guideline")));
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0].text, /Guideline approves with one revision/);
+  assert.match(result.content[0].text, /Consulted:/);
+  assert.doesNotMatch(result.content[0].text, /Delivered single subagent result/);
 });
 
 test("extension bootstraps /generalist before project agents exist", async () => {
@@ -3144,6 +3225,20 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   await assert.rejects(
     () => createPersonaInitDraft(root, "init-data/my-business.yaml"),
     /draft manifest already exists: init-data\/my-business\.yaml/,
+  );
+});
+
+test("shipped init-data fixtures retain their intended validation state", async () => {
+  const example = await planPersonaInitFromManifest(
+    process.cwd(),
+    "init-data/[EXAMPLE]business-operating-layer.yaml",
+  );
+  assert.equal(example.projectName, "business-operating-layer");
+  assert.ok(example.actions.length > 10);
+
+  await assert.rejects(
+    () => planPersonaInitFromManifest(process.cwd(), "init-data/_template.yaml"),
+    /unresolved template placeholders/,
   );
 });
 

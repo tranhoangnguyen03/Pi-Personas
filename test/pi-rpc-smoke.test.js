@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
 test("real Pi RPC loads the extension and executes persona-list", { timeout: 30_000 }, async () => {
   const root = process.cwd();
+  const workspace = await mkdtemp(path.join(tmpdir(), "pi-persona-rpc-"));
   const piBin = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "pi.cmd" : "pi");
   const extension = path.join(root, "extensions", "pi-persona.ts");
   const child = spawn(piBin, [
@@ -16,7 +19,7 @@ test("real Pi RPC loads the extension and executes persona-list", { timeout: 30_
     "--extension", extension,
     "--approve",
   ], {
-    cwd: root,
+    cwd: workspace,
     env: { ...process.env, PI_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -32,18 +35,31 @@ test("real Pi RPC loads the extension and executes persona-list", { timeout: 30_
     assert.ok(commands.data.commands.some((command) => command.name === "persona"));
     assert.ok(commands.data.commands.some((command) => command.name === "persona-list"));
 
+    child.stdin.write(`${JSON.stringify({ id: "init", type: "prompt", message: "/persona init" })}\n`);
+    const initialized = await rpc.waitFor(
+      (message) => message.type === "message_end"
+        && message.message?.customType === "pi-persona"
+        && /Initialized Pi Persona project/.test(message.message.content),
+      "persona init output",
+    );
+    assert.match(initialized.message.content, /Primary generalist: \/generalist/);
+
     child.stdin.write(`${JSON.stringify({ id: "list", type: "prompt", message: "/persona-list" })}\n`);
     const output = await rpc.waitFor(
-      (message) => message.type === "message_end" && message.message?.customType === "pi-persona",
+      (message) => message.type === "message_end"
+        && message.message?.customType === "pi-persona"
+        && /# Pi Personas/.test(message.message.content),
       "persona-list output",
     );
     assert.match(output.message.content, /# Pi Personas/);
+    assert.match(output.message.content, /generalist - generalist \(primary\)/);
   } finally {
     child.kill("SIGTERM");
     await Promise.race([
       once(child, "exit"),
       new Promise((resolve) => setTimeout(resolve, 2_000)),
     ]);
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
