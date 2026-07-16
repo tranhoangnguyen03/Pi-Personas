@@ -2,6 +2,15 @@
 
 All notable changes to Pi Persona are documented here.
 
+## 0.2.0 - 2026-07-12
+
+- Made `/persona onboard` the primary resumable setup command with a default
+  `init-data/my-operating-layer.yaml` manifest.
+- Added `/persona quick-start` for the minimal scaffold and kept `/persona init`
+  as a compatibility alias for onboarding.
+- Guided apply now indexes docs, runs doctor, lists personas, and activates the
+  primary generalist; empty states consistently direct users to onboarding.
+
 ## 0.1.0 - 2026-07-11
 
 - Added project-local active personas with baseline, docs, and native skill awareness.

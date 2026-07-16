@@ -165,17 +165,19 @@ Shared project context and operating principles go here.
 
 ## Command Surface
 
-`/persona init` creates the minimal baseline, primary generalist, and shared
-docs index. It preserves existing files.
+`/persona onboard` is the primary setup path. It creates or resumes
+`init-data/my-operating-layer.yaml`, starts an assisted interview, and lets the
+assistant edit the manifest, preview the plan, request approval, apply, index
+docs, run doctor, list personas, and activate the primary generalist.
+`--out <file>` overrides the default manifest path.
+
+`/persona quick-start` creates only the minimal baseline, primary generalist,
+and shared docs index. It preserves existing files. `/persona init` remains a
+compatibility alias for `/persona onboard`.
 
 `/persona init draft --out <file>`, `/persona init --plan --from <file>`,
-`/persona init --from <file>`, and `/persona init status --from <file>` support
-manifest-backed setup. The draft command creates a starter manifest and starts
-an assisted setup interview in the active Pi session; the assistant edits the
-YAML, calls the model-facing `persona_init` tool to preview the plan, asks for
-explicit approval, then applies, receives an automatic doctor report, and checks
-status. The slash commands remain available for direct user control. The
-manifest format is documented in
+`/persona init --from <file>`, and `/persona init status --from <file>` remain
+advanced manifest controls. The manifest format is documented in
 [`../../init-data/README.md`](../../init-data/README.md).
 
 `/persona use <name> [query]` activates any valid project persona through the
@@ -230,7 +232,7 @@ personas or `/persona clear` exits.
 
 `/generalist` is also a bootstrap command. Before a project has a launchable
 primary generalist, the bootstrap command returns setup guidance to run
-`/persona init` instead of falling through as ordinary prompt text.
+`/persona onboard` instead of falling through as ordinary prompt text.
 
 The active persona can use `persona_consult` when peer expertise is needed.
 That tool is the semantic consult boundary: it resolves the consultant, runs

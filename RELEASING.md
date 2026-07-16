@@ -20,7 +20,7 @@ real offline Pi RPC smoke test that loads the packaged extension and executes
 
 Use a disposable project with `npm:pi-personas` and `npm:pi-subagents` loaded:
 
-1. Run `/persona init`, `/persona doctor`, and `/persona-list`.
+1. Run `/persona onboard`, `/persona quick-start`, `/persona doctor`, and `/persona-list` in disposable workspaces.
 2. Activate a persona with `/persona use generalist` and verify follow-up turns
    retain and clear active state correctly.
 3. Run a focused `persona_consult` and verify the returned answer and provenance.

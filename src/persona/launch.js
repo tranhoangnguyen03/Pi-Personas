@@ -29,7 +29,7 @@ export function formatPersonaList(project) {
   ];
 
   if (project.agents.length === 0) {
-    lines.push("- none");
+    lines.push("No persona setup found. Run /persona onboard.");
     return lines.join("\n");
   }
 

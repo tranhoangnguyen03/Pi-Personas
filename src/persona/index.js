@@ -28,6 +28,7 @@ export {
   formatPersonaInitDraftAuthoringPrompt,
   formatPersonaInitManifestReport,
   parsePersonaInitArgs,
+  parsePersonaOnboardArgs,
   planPersonaInitFromManifest,
   statusPersonaInitFromManifest,
 } from "./init-manifest.js";

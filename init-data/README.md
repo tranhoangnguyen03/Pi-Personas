@@ -1,126 +1,100 @@
 # Pi Persona Init Data
 
-This directory holds YAML manifests for bootstrapping a Pi Persona project.
-These files are durable setup inputs, not generated runtime state.
+This directory documents the setup files used by Pi Persona. Most users do not
+need to edit these files directly.
 
-New users should start with the assisted draft command:
+## Guided Onboarding
+
+Open Pi from the project you want to configure, then run:
+
+```text
+/persona onboard
+```
+
+Pi Persona starts a setup interview, asks one question at a time, and builds a
+persona team for this project. You answer questions about the workspace and the
+help you want; the assistant handles the setup file.
+
+The default file is `init-data/my-operating-layer.yaml`. It is a durable,
+reviewable record of the intended setup, not hidden runtime state. Its filename
+is not part of the interview.
+
+When the draft is ready, the assistant previews the plan, asks for explicit
+approval, applies it, builds declared docs indexes, runs doctor verification,
+lists the available personas, and activates the primary generalist.
+
+The command is safe to rerun:
+
+- If the draft exists but setup is incomplete, onboarding resumes from it.
+- If personas already exist, Pi Persona reports the current roster instead of
+  overwriting files.
+
+Choose another manifest path only when needed:
+
+```text
+/persona onboard --out init-data/team-operating-layer.yaml
+```
+
+For a minimal baseline and generalist without guided setup, run:
+
+```text
+/persona quick-start
+```
+
+`/persona init` remains an alias for `/persona onboard`.
+
+## Advanced Manual Flow
+
+The rest of this document is for users who want direct control over the setup
+manifest. Guided onboarding uses the equivalent `persona_init` tool.
+Advanced users can still control each stage directly:
 
 ```text
 /persona init draft --out init-data/my-operating-layer.yaml
-```
-
-The command creates a starter manifest and starts an agentic setup interview in
-the Pi session. Answer the questions in chat; the assistant should edit the YAML
-for you, call `persona_init` to preview the result, ask for explicit approval,
-and only then apply it with `confirmed: true`. Assisted apply includes a doctor
-report so schema or runtime failures cannot be mistaken for successful onboarding.
-Planning and apply reject unchanged starter placeholders. Doctor also rejects
-known starter placeholders that remain in active persona files or declared
-docs, including the incomplete-spec markers caught during manual verification.
-
-Advanced users can still copy `_template.yaml` by hand when they already know
-the exact operating layer they want.
-
-## Manual Command Flow
-
-The assistant uses the equivalent `persona_init` tool during guided setup.
-Advanced users can run these slash commands directly.
-
-Create a working draft and start the assisted setup interview:
-
-```text
-/persona init draft --out init-data/my-operating-layer.yaml
-```
-
-Preview what the manifest would create:
-
-```text
 /persona init --plan --from init-data/my-operating-layer.yaml
-```
-
-Apply the manifest:
-
-```text
 /persona init --from init-data/my-operating-layer.yaml
-```
-
-Check setup progress after applying:
-
-```text
 /persona init status --from init-data/my-operating-layer.yaml
 ```
 
-Validate the resulting persona project. Manual slash-command apply does not run
-this automatically:
+Manual slash-command apply does not run doctor automatically, so follow it with:
 
 ```text
 /persona doctor
 ```
 
-The apply command creates missing files and preserves files that already exist.
-It should be safe to rerun after editing the manifest, but it will not overwrite
-existing agent or docs files.
+Apply creates missing files and preserves files that already exist. It is safe
+to rerun after editing the manifest, but it does not overwrite existing agent
+or docs files.
 
-## What To Edit
+## Manifest Fields
 
-If you are using assisted setup, these fields are what the assistant edits for
-you. You do not need to know the YAML structure before starting.
+If you use assisted setup, the assistant edits these fields for you:
 
-`project.name` is a human-readable setup name. Use a short, stable name.
+- `project.name`: short, stable human-readable setup name.
+- `baseline.docs`: shared docs or docs directories.
+- `baseline.skills`: native `pi-subagents` skill names.
+- `baseline.prompt`: shared operating instructions.
+- `docs.files`: workspace paths and starter file contents.
+- `agents`: launchable generalists and specialists.
 
-`baseline` defines shared context for every persona:
-
-- `baseline.docs` lists shared docs or docs directories.
-- `baseline.skills` lists native `pi-subagents` skill names.
-- `baseline.prompt` is the shared operating prompt.
-
-`docs.files` maps workspace paths to initial file contents. Use it for starter
-docs that should be created with the persona layer, such as shared context,
-workstream briefs, and `_index.md` files.
-
-`agents` defines launchable personas. Each agent needs:
+Each agent needs:
 
 - `name`: command-safe lowercase name, such as `generalist` or `content-writer`.
 - `role`: `generalist` or `specialist`.
 - `primary: true`: exactly one generalist must have this.
-- `description`: the routing description used by the active persona.
-- `docs`: docs or docs directories for that persona.
+- `description`: concise routing description.
+- `docs`: that persona's docs or docs directories.
 - `skills`: native `pi-subagents` skill names.
-- `prompt`: the persona-specific operating instructions.
+- `prompt`: persona-specific operating instructions.
 
 ## Editing Rules
 
 - Keep paths inside the physical workspace; symlink escapes are rejected.
 - Use relative paths, not absolute paths.
-- Use command-safe agent names beginning with a lowercase letter, followed by
-  lowercase letters, numbers, or hyphens.
+- Use names beginning with a lowercase letter and containing only lowercase
+  letters, numbers, or hyphens.
 - Keep exactly one primary generalist.
 - Put shared facts in `baseline` or shared docs.
-- Put specialist-specific facts in that specialist's docs and prompt.
+- Put specialist facts in specialist docs and prompts.
 - Use native skill names only; do not put filesystem paths in `skills`.
-- Prefer docs directories with `_index.md` files for anything larger than one
-  short note.
-
-## Guidance For AI Assistants
-
-When helping edit these manifests:
-
-- Preserve the YAML structure and `version: 1`.
-- Treat the user as new to Pi Persona; do not ask them to manually edit YAML.
-- Ask one question at a time and edit the manifest for the user.
-- Ask only for missing facts that materially change the persona layer.
-- Keep the template copy editable by humans.
-- Do not invent secrets, private business facts, or unsupported skills.
-- Prefer small, named specialists with clear routing descriptions.
-- Keep generated docs concise enough that the user can review them.
-- Call `persona_init` with `action: plan` before applying.
-- Summarize the plan and ask for explicit approval.
-- Only after approval, call `persona_init` with `action: apply` and
-  `confirmed: true`, then call it with `action: status`.
-- Treat the doctor report returned by apply as the readiness check.
-- Explain activation with `/persona use <name>` or the direct command shown by
-  `/persona-list`; never use `@name` syntax.
-
-Use `_template.yaml` as the minimal reference. Use
-`[EXAMPLE]business-operating-layer.yaml` as a fuller example of a multi-persona
-setup.
+- Resolve every starter placeholder before planning or applying.

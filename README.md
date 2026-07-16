@@ -7,52 +7,113 @@ The extension keeps direct persona answers in the active Pi chat session.
 Subagents are used only when an active persona explicitly consults another
 persona or when `/persona-roundtable` runs a multi-persona workflow.
 
-## What It Provides
+## Get Started
 
-- Project-local persona files under `.pi/agents/`.
-- A shared `_baseline.md` that is merged into every persona.
-- Direct persona commands such as `/generalist` and `/<specialist-name>`.
-- A guaranteed `/persona use <name> [query]` activation route when an alias is reserved or collides.
-- `persona_consult` for active personas to ask project peers for help.
-- Assisted manifest authoring through the model-callable `persona_init` tool.
-- `/persona-roundtable` for explicit multi-persona discussion.
-- `/persona doctor` for setup and dependency validation.
-- Active persona status through the `pi-persona-active` status key.
-
-## Runtime Dependencies
-
-Pi Persona requires Pi Coding Agent 0.80.6 through 0.80.x.
-
-Pi Persona is built on Pi package extensions. Consult and round-table workflows
-require `pi-subagents` to be installed and visible to Pi:
-
-```sh
-pi install npm:pi-subagents
-```
-
-Managed round-table delivery requires `pi-subagents` 0.35.0 or newer. Doctor
-warns about older runtimes, and `/persona-roundtable` refuses to start rather
-than expose raw child results, run IDs, or artifact paths.
-
-Installing this repository's npm dependencies is not enough. `pi-subagents`
-must be configured as a Pi package so Pi can expose its child-session behavior.
-Its native supervisor and result channels are sufficient; external
-`pi-intercom` is not required.
-
-Direct persona activation can still work without that child-runtime package,
-but `/persona doctor`, `persona_consult`, and `/persona-roundtable` will report
-actionable readiness guidance until the dependencies are available.
-
-## Install
+Install Pi Persona and its collaboration runtime:
 
 ```sh
 pi install npm:pi-personas
 pi install npm:pi-subagents
 ```
 
-Then restart or reload Pi so the extension set is fresh.
+Restart Pi or run `/reload`. Then open Pi from the project you want to configure:
 
-### Local Development
+```sh
+cd /path/to/your/project
+pi
+```
+
+Persona setup is project-local: each workspace gets its own team and context.
+In Pi, start guided onboarding:
+
+```text
+/persona onboard
+```
+
+Answer one question at a time. Pi Persona helps define a generalist and the
+smallest useful set of specialists for this workspace, shows what it will
+create, and asks before writing the setup. When onboarding finishes, the
+primary generalist is active and ready for your first task.
+
+See the personas created for this project:
+
+```text
+/persona-list
+```
+
+Ask the primary generalist for help:
+
+```text
+/generalist what should we do next?
+```
+
+To use a specialist, choose a name shown by `/persona-list`:
+
+```text
+/persona use <name> review this from your role
+```
+
+When the listed direct command is available, `/<name> ...` works too.
+
+## Common Commands
+
+```text
+/persona onboard                         Start or resume guided setup
+/persona-list                            List this project's personas
+/generalist <request>                    Ask the primary generalist
+/persona use <name> <request>            Ask a specific persona
+/persona-roundtable <question>           Ask several relevant specialists
+/persona status                          Show the active persona
+/persona clear                           Leave persona mode
+/persona doctor                          Check setup and runtime readiness
+```
+
+## Alternative Setup Options
+
+Most users only need `/persona onboard`. For a minimal baseline and generalist
+without the guided interview, run:
+
+```text
+/persona quick-start
+```
+
+`/persona init` remains an alias for `/persona onboard` for compatibility.
+Advanced users can choose another setup-manifest path with:
+
+```text
+/persona onboard --out <file>
+```
+
+See [`init-data/README.md`](init-data/README.md) for manual manifest controls.
+
+## What It Provides
+
+- Project-local personas and shared context under `.pi/agents/`.
+- Direct persona commands such as `/generalist` and `/<specialist-name>`.
+- A guaranteed `/persona use <name> [query]` route when a direct command collides.
+- Focused peer consultation between project personas.
+- Explicit multi-persona discussion through `/persona-roundtable`.
+- Guided, resumable setup and `/persona doctor` readiness checks.
+- Persistent active-persona state in the current Pi session.
+
+## Runtime Requirements
+
+Pi Persona requires Pi Coding Agent 0.80.6 through 0.80.x. Consults and
+round-tables require `pi-subagents` 0.35.0 or newer to be installed as a Pi
+package. Direct persona activation can still work without it, while doctor,
+consults, and round-tables provide installation guidance.
+
+External `pi-intercom` is not required. Installing repository npm dependencies
+alone does not configure `pi-subagents` as a Pi package.
+
+## How Round-Tables Work
+
+`/persona-roundtable` asks the primary generalist to select one to five relevant
+specialists. They form independent positions, revise after seeing their peers'
+views, and return one primary-generalist synthesis. The tool panel shows the
+selected panel, reasons, progress, current activity, and completion summary.
+
+## Local Development
 
 Install this checkout as a project-local Pi package while developing:
 
@@ -65,83 +126,6 @@ pi install npm:pi-subagents
 Pi Persona detects duplicate `pi-subagents` declarations across global and
 project settings, keeps one global copy, backs up changed settings, and asks
 you to reload before orchestration continues.
-
-## Quickstart
-
-Initialize a project:
-
-```text
-/persona init
-```
-
-Validate setup:
-
-```text
-/persona doctor
-```
-
-Ask the primary generalist:
-
-```text
-/generalist what should we do next?
-```
-
-Ask a specialist directly:
-
-```text
-/example-specialist review this from your role
-```
-
-The canonical activation form always works for valid project personas:
-
-```text
-/persona use example-specialist review this from your role
-```
-
-Direct persona command names are resolved against the active workspace each
-time they run. If Pi still shows a command name from a different workspace, the
-command fails with workspace guidance instead of activating a stale persona.
-Reserved names and extension-command collisions should use `/persona use`.
-
-List available personas:
-
-```text
-/persona-list
-```
-
-Check or clear session state:
-
-```text
-/persona status
-/persona clear
-```
-
-Run an explicit multi-persona workflow:
-
-```text
-/persona-roundtable should we launch this now?
-```
-
-The command activates the primary generalist, which selects one to five relevant
-specialists with a schema-validated rationale and calls `persona_roundtable`
-exactly once. That single child workflow runs both discussion rounds and the
-primary-generalist synthesis over only the selected roster. Its bridge request
-uses response-only delivery so the clean tool result is the sole completion
-message in the parent conversation. The tool panel discloses the query, context,
-selected specialists, reasons, three-stage process, per-persona status, current
-activity, next step, and a compact execution summary.
-
-For richer project setup, use assisted manifest drafting:
-
-```text
-/persona init draft --out init-data/my-operating-layer.yaml
-```
-
-Pi Persona creates a draft and starts a setup interview in the active Pi
-session. Answer the questions in chat; the assistant edits the YAML for you and
-uses `persona_init` to preview the plan. It asks for explicit approval before
-applying, returns doctor verification, then reports manifest status. See
-[`init-data/README.md`](init-data/README.md) for the manifest details.
 
 ## Privacy And Data Flow
 
@@ -162,9 +146,8 @@ allowed to process them.
 
 ## Troubleshooting
 
-**`/generalist` says to run `/persona init`.** The project does not yet have a
-launchable primary generalist under `.pi/agents/`. Run `/persona init`, then
-`/persona doctor`.
+**`/generalist` says no persona setup was found.** Run `/persona onboard` and
+answer the guided setup questions.
 
 **`persona_consult` reports an unknown consultant.** `persona_consult` only
 accepts project Pi Persona agents discovered in the active workspace. Use

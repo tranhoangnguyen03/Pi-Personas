@@ -1,6 +1,6 @@
 {
   "name": "pi-personas",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Project-local personas, consults, and round-tables for Pi Coding Agent.",
   "license": "MIT",
   "type": "module",

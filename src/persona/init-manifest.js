@@ -10,6 +10,8 @@ import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
 
+export const DEFAULT_PERSONA_INIT_MANIFEST = "init-data/my-operating-layer.yaml";
+
 const VALID_ROLES = new Set(["generalist", "specialist"]);
 const TEMPLATE_PLACEHOLDERS = [
   "Add the user's business facts, priorities, constraints, audience, products, services, channels, and recurring decisions here.",
@@ -24,6 +26,20 @@ export function findPersonaTemplatePlaceholders(value) {
   const normalized = normalizePlaceholderText(value);
   if (!normalized) return [];
   return TEMPLATE_PLACEHOLDERS.filter((placeholder) => normalized.includes(placeholder));
+}
+
+export function parsePersonaOnboardArgs(args) {
+  const tokens = tokenizeArgs(args);
+  if (tokens.length === 0) return { out: DEFAULT_PERSONA_INIT_MANIFEST };
+  const equalsOut = tokens.length === 1 && tokens[0].startsWith("--out=")
+    ? tokens[0].slice("--out=".length)
+    : "";
+  const spacedOut = tokens.length === 2 && tokens[0] === "--out" && !tokens[1].startsWith("--")
+    ? tokens[1]
+    : "";
+  const out = equalsOut || spacedOut;
+  if (!out) throw new Error("Usage: /persona onboard [--out <file>]");
+  return { out };
 }
 
 export function parsePersonaInitArgs(args) {
@@ -48,7 +64,7 @@ export function parsePersonaInitArgs(args) {
   };
 }
 
-export async function createPersonaInitDraft(root, outPath) {
+export async function createPersonaInitDraft(root, outPath, options = {}) {
   const resolved = await resolveWorkspacePathForAccess(root, outPath);
   if (!resolved.ok) throw new Error(`draft path must stay inside workspace: ${outPath}`);
 
@@ -57,8 +73,16 @@ export async function createPersonaInitDraft(root, outPath) {
   try {
     await writeFile(resolved.path, renderStarterManifest(projectName), { encoding: "utf8", flag: "wx" });
   } catch (error) {
-    if (error?.code === "EEXIST") throw new Error(`draft manifest already exists: ${outPath}`);
-    throw error;
+    if (error?.code !== "EEXIST" || options.resume !== true) {
+      if (error?.code === "EEXIST") throw new Error(`draft manifest already exists: ${outPath}`);
+      throw error;
+    }
+    await readFile(resolved.path, "utf8");
+    return {
+      mode: "resume",
+      source: outPath,
+      projectName,
+    };
   }
 
   return {
@@ -117,7 +141,7 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
 }
 
 export function formatPersonaInitManifestReport(result, options = {}) {
-  if (result.mode === "draft") return formatDraftReport(result);
+  if (result.mode === "draft" || result.mode === "resume") return formatDraftReport(result);
   if (result.mode === "status") return formatStatusReport(result);
   const title = result.mode === "apply" ? "Pi Persona Init Applied" : "Pi Persona Init Plan";
   const lines = [
@@ -150,13 +174,14 @@ export function formatPersonaInitManifestReport(result, options = {}) {
 }
 
 function formatDraftReport(result) {
+  const resuming = result.mode === "resume";
   return [
-    "# Pi Persona Init Draft",
+    resuming ? "# Pi Persona Onboarding" : "# Pi Persona Init Draft",
     "",
-    `Created: ${result.source}`,
+    `${resuming ? "Using" : "Created"}: ${result.source}`,
     `Project: ${result.projectName}`,
     "",
-    "Starting assisted setup interview. The manifest is a working draft; answer the setup questions in this chat before applying it.",
+    `${resuming ? "Resuming" : "Starting"} assisted setup interview. The manifest is a working draft; answer the setup questions in this chat before applying it.`,
     "",
     "Next: continue the interview. The assistant will preview the plan before asking to apply it.",
   ].join("\n");
@@ -167,12 +192,13 @@ export function formatPersonaInitDraftAuthoringPrompt(result) {
     `Help me shape the Pi Persona setup manifest at \`${result.source}\`.`,
     "",
     "Treat me as a new user who does not yet know what to put where.",
+    "The default manifest filename is already chosen; ask for a short workspace or operating-layer name instead of asking me about YAML filenames.",
     "Do not ask me to manually edit YAML.",
     "Ask one question at a time, starting with what this workspace is for and what kind of help I want from the personas.",
     "As I answer, edit the manifest for me using conservative defaults: one primary generalist, small specialists with clear routing descriptions, shared facts in docs/shared/, and specialist facts in docs/workstreams/<name>/.",
     "Do not invent secrets, private business facts, unsupported skills, runtime-only fields, or legacy tools/consults/tags metadata.",
     "",
-    `When the manifest has enough information, call persona_init with action: plan and source: ${result.source}. Summarize that plan and ask for explicit approval. Only after approval, call persona_init with action: apply, source: ${result.source}, and confirmed: true. The apply result includes persona doctor verification. Then call persona_init with action: status and follow its next-step guidance.`,
+    `When the manifest has enough information, call persona_init with action: plan and source: ${result.source}. Summarize that plan and ask for explicit approval. Only after approval, call persona_init with action: apply, source: ${result.source}, and confirmed: true. The apply completes docs indexing, status, doctor verification, persona listing, and primary-generalist activation. Present that result and ask what I would like help with first.`,
     "When explaining activation, use /persona use <name> or the direct slash command shown by /persona-list. Never use @name syntax.",
   ].join("\n");
 }
@@ -542,7 +568,7 @@ function tokenizeArgs(input) {
     }
     current += char;
   }
-  if (quote) throw new Error("unterminated quoted value in /persona init arguments");
+  if (quote) throw new Error("unterminated quoted value in persona command arguments");
   if (current) tokens.push(current);
   return tokens;
 }

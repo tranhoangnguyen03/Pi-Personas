@@ -204,12 +204,13 @@ multi-persona workflow. It is separate from ordinary direct persona answers.
 
 ## Assisted Manifest Authoring
 
-`/persona init draft --out <file>` creates the durable draft and sends an
-authoring request into the active Pi chat. The assistant edits that file and
-uses the `persona_init` tool to plan, apply, and inspect status. `apply` requires
-`confirmed: true` after explicit user approval and returns an immediate doctor
-report after writing files. The existing slash commands remain equivalent
-user-facing controls.
+`/persona onboard` creates or resumes the durable draft at
+`init-data/my-operating-layer.yaml` by default and sends an authoring request
+into the active Pi chat. The assistant edits that file and uses the
+`persona_init` tool to plan, confirmation-gated apply, index docs, inspect
+status, run doctor, list personas, and activate the primary generalist.
+`/persona quick-start` provides the minimal scaffold; `/persona init` remains an
+onboarding alias and the older manifest slash forms remain advanced controls.
 
 ## Doctor And Runtime Checks
 

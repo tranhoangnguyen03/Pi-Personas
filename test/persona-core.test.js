@@ -30,6 +30,7 @@ import {
   formatRoundtableRosterPreview,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
+  parsePersonaOnboardArgs,
   parsePersonaNewArgs,
   parseFrontmatterDocument,
   planPersonaInitFromManifest,
@@ -319,6 +320,19 @@ test("runtime Pi packages are optional peers for plain npm installs", async () =
   assert.equal(manifest.publishConfig.access, "public");
 });
 
+test("README gives new users one project-local onboarding path", async () => {
+  const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
+  const getStarted = readme.slice(readme.indexOf("## Get Started"), readme.indexOf("## Common Commands"));
+
+  assert.match(getStarted, /cd \/path\/to\/your\/project/);
+  assert.match(getStarted, /\/persona onboard/);
+  assert.match(getStarted, /project-local/);
+  assert.match(getStarted, /\/persona-list/);
+  assert.doesNotMatch(getStarted, /\/example-specialist/);
+  assert.doesNotMatch(getStarted, /\/persona quick-start/);
+  assert.doesNotMatch(getStarted, /setup-manifest/);
+});
+
 test("README maintainer doc links point to checked-in files", async () => {
   const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
 
@@ -351,18 +365,65 @@ test("extension uses the persona command namespace instead of generic agent", as
   assert.match(source, /\/persona use <name>/);
 });
 
-test("extension starts agentic authoring after persona init draft", async () => {
-  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
-  const draftBlock = source.slice(
-    source.indexOf('if (parsed.mode === "draft")'),
-    source.indexOf('if (parsed.mode === "plan")'),
-  );
+test("persona onboard starts or resumes guided setup at the default manifest", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-onboard-"));
+  const harness = await createExtensionHarness(root);
+  const command = harness.commands.get("persona");
 
-  assert.match(draftBlock, /createPersonaInitDraft/);
-  assert.match(draftBlock, /sendPersonaOutput/);
-  assert.match(draftBlock, /pi\.sendUserMessage\(/);
-  assert.match(draftBlock, /formatPersonaInitDraftAuthoringPrompt\(result\)/);
-  assert.doesNotMatch(draftBlock, /Review or edit the YAML/);
+  await command.handler("onboard", harness.ctx);
+
+  assert.match(await readFile(path.join(root, "init-data/my-operating-layer.yaml"), "utf8"), /version: 1/);
+  assert.match(harness.messages.at(-1).content, /Starting assisted setup interview/);
+  assert.match(harness.sentUserMessages.at(-1).message, /Ask one question at a time/);
+
+  await command.handler("onboard", harness.ctx);
+
+  assert.match(harness.messages.at(-1).content, /Resuming assisted setup interview/);
+  assert.equal(harness.sentUserMessages.length, 2);
+});
+
+test("persona onboard reports an existing persona setup instead of restarting", async () => {
+  const root = await createCommandWorkspace("brand");
+  const harness = await createExtensionHarness(root);
+
+  await harness.commands.get("persona").handler("onboard", harness.ctx);
+
+  assert.match(harness.messages.at(-1).content, /Pi Persona is already set up/);
+  assert.match(harness.messages.at(-1).content, /# Pi Persona Doctor/);
+  assert.match(harness.messages.at(-1).content, /# Pi Personas/);
+  assert.equal(harness.sentUserMessages.length, 0);
+});
+
+test("persona onboard reports readiness after an applied manifest", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-onboard-applied-"));
+  await writeText(path.join(root, "init-data/my-operating-layer.yaml"), starterInitManifest());
+  await applyPersonaInitFromManifest(root, "init-data/my-operating-layer.yaml");
+  await createDocsIndex(root, { all: true });
+  const harness = await createExtensionHarness(root);
+
+  await harness.commands.get("persona").handler("onboard", harness.ctx);
+
+  assert.match(harness.messages.at(-1).content, /Pi Persona onboarding is complete/);
+  assert.match(harness.messages.at(-1).content, /# Pi Persona Doctor/);
+  assert.equal(harness.sentUserMessages.length, 0);
+});
+
+test("persona init aliases onboard while quick-start keeps the minimal scaffold", async () => {
+  const onboardRoot = await mkdtemp(path.join(tmpdir(), "pi-persona-init-alias-"));
+  const onboard = await createExtensionHarness(onboardRoot);
+
+  await onboard.commands.get("persona").handler("init", onboard.ctx);
+
+  assert.match(await readFile(path.join(onboardRoot, "init-data/my-operating-layer.yaml"), "utf8"), /version: 1/);
+  assert.equal(onboard.sentUserMessages.length, 1);
+
+  const quickRoot = await mkdtemp(path.join(tmpdir(), "pi-persona-quick-start-"));
+  const quick = await createExtensionHarness(quickRoot);
+
+  await quick.commands.get("persona").handler("quick-start", quick.ctx);
+
+  assert.match(await readFile(path.join(quickRoot, ".pi/agents/generalist.md"), "utf8"), /primary: true/);
+  assert.equal(quick.sentUserMessages.length, 0);
 });
 
 test("extension exposes model-callable manifest planning and confirmation-gated apply", async () => {
@@ -400,7 +461,11 @@ test("extension exposes model-callable manifest planning and confirmation-gated 
   assert.notEqual(applied.isError, true);
   assert.match(applied.content[0].text, /Pi Persona Init Applied/);
   assert.match(applied.content[0].text, /Pi Persona Doctor/);
+  assert.match(applied.content[0].text, /# Pi Personas/);
+  assert.match(applied.content[0].text, /What would you like help with first\?/);
   assert.ok(["pass", "warning"].includes(applied.details.doctor.status));
+  assert.ok(applied.details.status.items.every((item) => item.state === "done"));
+  assert.equal(harness.entries.at(-1).data.agentName, "generalist");
   assert.deepEqual((await discoverPersonaProject(root)).agents.map((agent) => agent.name), [
     "example-specialist",
     "generalist",
@@ -583,14 +648,12 @@ test("persona consult requires and matches the active requester", async () => {
 });
 
 test("extension bootstraps /generalist before project agents exist", async () => {
-  const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
-  const bootstrapIndex = source.indexOf('registerPersonaCommand("generalist")');
-  const sessionStartIndex = source.indexOf('pi.on("session_start"');
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-generalist-bootstrap-"));
+  const harness = await createExtensionHarness(root);
 
-  assert.ok(bootstrapIndex >= 0);
-  assert.ok(bootstrapIndex < sessionStartIndex);
-  assert.match(source, /\/persona init/);
-  assert.match(source, /No Pi Persona `\/generalist` agent found/);
+  await harness.commands.get("generalist").handler("", harness.ctx);
+
+  assert.match(harness.messages.at(-1).content, /No persona setup found\. Run \/persona onboard\./);
 });
 
 test("extension rejects stale direct persona commands in the current workspace", async () => {
@@ -1151,6 +1214,17 @@ test("consult progress reports observable activity and idle countdown", () => {
   assert.match(text, /Now: read_webpage · https:\/\/example\.com/);
   assert.match(text, /1 searches · 1 webpages · 1 repository/);
   assert.match(text, /cancelling in 1:00 unless activity resumes/);
+});
+
+test("doctor guides empty workspaces to onboarding", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-empty-doctor-"));
+  const result = await runDoctor(root, {
+    dependencyStatus: {
+      piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
+    },
+  });
+
+  assert.match(formatDoctorReport(result), /No persona setup found\. Run \/persona onboard\./);
 });
 
 test("doctor warns but keeps direct mode available when pi-subagents is missing", async () => {
@@ -2095,6 +2169,13 @@ test("formatConsultProvenance reports successful and failed consults compactly",
   assert.match(text, /- pricing \(failed\): doc path missing/);
 });
 
+test("persona list guides empty workspaces to onboarding", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-empty-list-"));
+  const project = await discoverPersonaProject(root);
+
+  assert.match(formatPersonaList(project), /No persona setup found\. Run \/persona onboard\./);
+});
+
 test("formatPersonaList shows read-only discovery details", async () => {
   const root = await createWorkspace();
   const project = await discoverPersonaProject(root);
@@ -2947,6 +3028,18 @@ test("formatPersonaProjectScaffoldCreatedMessage gives init next steps", async (
   ].join("\n"));
 });
 
+test("parsePersonaOnboardArgs defaults the manifest path and accepts an override", () => {
+  assert.deepEqual(parsePersonaOnboardArgs(""), {
+    out: "init-data/my-operating-layer.yaml",
+  });
+  assert.deepEqual(parsePersonaOnboardArgs("--out init-data/team-layer.yaml"), {
+    out: "init-data/team-layer.yaml",
+  });
+  assert.throws(() => parsePersonaOnboardArgs("unexpected"), /Usage: \/persona onboard/);
+  assert.throws(() => parsePersonaOnboardArgs("--out --other"), /Usage: \/persona onboard/);
+  assert.throws(() => parsePersonaOnboardArgs("--out=init-data/team.yaml extra"), /Usage: \/persona onboard/);
+});
+
 test("parsePersonaInitArgs handles basic plan apply and status modes", () => {
   assert.deepEqual(parsePersonaInitArgs(""), { mode: "basic" });
   assert.deepEqual(parsePersonaInitArgs("draft --out init-data/business.yaml"), {
@@ -3012,7 +3105,8 @@ test("persona init draft writes a valid starter manifest without overwriting", a
   assert.match(prompt, /Ask one question at a time/);
   assert.match(prompt, /call persona_init with action: plan/);
   assert.match(prompt, /confirmed: true/);
-  assert.match(prompt, /apply result includes persona doctor verification/);
+  assert.match(prompt, /apply completes docs indexing, status, doctor verification, persona listing, and primary-generalist activation/);
+  assert.doesNotMatch(prompt, /Then call persona_init with action: status/);
   assert.match(prompt, /Never use @name syntax/);
 
   await assert.rejects(

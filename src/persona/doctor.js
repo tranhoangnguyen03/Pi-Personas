@@ -99,6 +99,9 @@ export function formatDoctorReport(result) {
   const primaryState = getPrimaryGeneralistState(result.project);
   lines.push(`Primary generalist: ${primaryState.effectivePrimary.length === 1 ? primaryState.effectivePrimary[0].name : primaryState.effectivePrimary.length}`);
   lines.push(`Generalists: ${primaryState.generalists.length}`);
+  if (result.project.agents.length === 0) {
+    lines.push("", "No persona setup found. Run /persona onboard.");
+  }
 
   if (result.project.baseline) {
     lines.push(`Baseline: ${result.project.baseline.relativePath}`);

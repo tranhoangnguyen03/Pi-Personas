@@ -31,6 +31,7 @@ import {
   isDirectPersonaCommandName,
   parsePersonaIndexArgs,
   parsePersonaInitArgs,
+  parsePersonaOnboardArgs,
   parsePersonaNewArgs,
   PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
   planPersonaInitFromManifest,
@@ -390,18 +391,35 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           }
           result = await applyPersonaInitFromManifest(ctx.cwd, params.source);
           await registerProjectCommands(ctx.cwd);
+          const index = await createDocsIndex(ctx.cwd, { all: true });
+          const status = await statusPersonaInitFromManifest(ctx.cwd, params.source);
           doctor = await runDoctor(ctx.cwd);
+          const project = await discoverPersonaProject(ctx.cwd);
+          const primary = project.agents.find((agent: any) => agent.role === "generalist" && agent.primary)
+            ?? project.agents.find((agent: any) => agent.role === "generalist");
+          if (primary && doctor.status !== "error") setActivePersona(ctx, primary.name);
+          return {
+            content: [{
+              type: "text",
+              text: [
+                formatPersonaInitManifestReport(result, { doctorIncluded: true }),
+                formatDoctorReport(doctor),
+                formatPersonaList(project),
+                doctor.status === "error"
+                  ? "Onboarding needs attention; fix the doctor errors above, then run /persona onboard again."
+                  : "What would you like help with first?",
+              ].join("\n\n"),
+            }],
+            isError: doctor.status === "error" || undefined,
+            details: { ...result, index, status, doctor },
+          };
         }
         return {
           content: [{
             type: "text",
-            text: [
-              formatPersonaInitManifestReport(result, { doctorIncluded: Boolean(doctor) }),
-              doctor ? formatDoctorReport(doctor) : "",
-            ].filter(Boolean).join("\n\n"),
+            text: formatPersonaInitManifestReport(result),
           }],
-          isError: doctor?.status === "error" || undefined,
-          details: doctor ? { ...result, doctor } : result,
+          details: result,
         };
       } catch (error) {
         return {
@@ -446,7 +464,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("persona", {
-    description: "Pi Persona commands. Supports: /persona init, /persona doctor, /persona new <name>, /persona index [docs-dir], /persona status, /persona clear",
+    description: "Pi Persona commands. Start with /persona onboard; use /persona quick-start for a minimal scaffold.",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       const [subcommand = ""] = trimmed.split(/\s+/, 1);
@@ -487,16 +505,56 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         return;
       }
 
+      if (subcommand === "onboard" || (subcommand === "init" && trimmed === "init")) {
+        try {
+          const parsed = parsePersonaOnboardArgs(subcommand === "onboard" ? trimmed.slice("onboard".length) : "");
+          const project = await discoverPersonaProject(ctx.cwd);
+          if (project.agents.length > 0) {
+            let status;
+            try {
+              status = await statusPersonaInitFromManifest(ctx.cwd, parsed.out);
+            } catch (error) {
+              if ((error as any)?.code !== "ENOENT") throw error;
+            }
+            const doctor = await runDoctor(ctx.cwd);
+            sendPersonaOutput(pi, ctx, [
+              status?.items.every((item: any) => item.state === "done") && doctor.status !== "error"
+                ? "Pi Persona onboarding is complete."
+                : "Pi Persona is already set up in this workspace.",
+              "",
+              formatDoctorReport(doctor),
+              "",
+              formatPersonaList(project),
+            ].join("\n"), doctor.status === "error" ? "error" : "info");
+            return;
+          }
+          const result = await createPersonaInitDraft(ctx.cwd, parsed.out, { resume: true });
+          sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
+          pi.sendUserMessage(
+            formatPersonaInitDraftAuthoringPrompt(result),
+            ctx.isIdle() ? undefined : { deliverAs: "followUp" },
+          );
+        } catch (error) {
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
+      if (subcommand === "quick-start") {
+        try {
+          const result = await createPersonaProjectScaffold(ctx.cwd);
+          registerPersonaCommand(result.primaryGeneralist);
+          sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
+        } catch (error) {
+          sendPersonaOutput(pi, ctx, error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
       if (subcommand === "init") {
         const rawArgs = trimmed.slice("init".length).trim();
         try {
           const parsed = parsePersonaInitArgs(rawArgs);
-          if (parsed.mode === "basic") {
-            const result = await createPersonaProjectScaffold(ctx.cwd);
-            registerPersonaCommand(result.primaryGeneralist);
-            sendPersonaOutput(pi, ctx, formatPersonaProjectScaffoldCreatedMessage(result), "info");
-            return;
-          }
           if (parsed.mode === "draft") {
             const result = await createPersonaInitDraft(ctx.cwd, parsed.out);
             sendPersonaOutput(pi, ctx, formatPersonaInitManifestReport(result), "info");
@@ -613,7 +671,7 @@ function normalizeCommandText(value: string): string {
 function formatPersonaCommandError(agentName: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (agentName === "generalist" && message === "Unknown agent: generalist") {
-    return "No Pi Persona `/generalist` agent found. Run `/persona init` first, or use `/persona-list` if this project uses a different primary persona name.";
+    return "No persona setup found. Run /persona onboard.";
   }
   if (message === `Unknown agent: ${agentName}`) {
     return `/${agentName} is not available in this workspace. Run /persona-list.`;
@@ -623,9 +681,11 @@ function formatPersonaCommandError(agentName: string, error: unknown): string {
 
 function personaUsage(): string {
   return [
+    "Usage: /persona onboard [--out <file>]",
+    "Usage: /persona quick-start",
     "Usage: /persona use <name> [query]",
-    "Usage: /persona init",
-    "Usage: /persona init draft --out <file>",
+    "Usage: /persona init  (alias for /persona onboard)",
+    "Usage: /persona init draft --out <file>  (legacy)",
     "Usage: /persona init --plan --from <file>",
     "Usage: /persona init --from <file>",
     "Usage: /persona init status --from <file>",
