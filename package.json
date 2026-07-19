@@ -1,6 +1,6 @@
 {
   "name": "pi-personas",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Project-local personas, consults, and round-tables for Pi Coding Agent.",
   "license": "MIT",
   "type": "module",
@@ -48,7 +48,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.6 <0.81.0",
-    "pi-subagents": ">=0.35.0"
+    "pi-subagents": ">=0.34.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {

@@ -30,8 +30,8 @@ Use a disposable project with `npm:pi-personas` and `npm:pi-subagents` loaded:
    returned without raw run IDs, paths, or subagent-control messages.
    Expand the call and verify query, context, roster reasons, phase explanations,
    stable per-persona state, next-step guidance, and the final process summary.
-   Verify `pi-subagents` is at least 0.35.0 and that no `subagent-result` message
-   or receipt-triggered assistant turn appears after the managed synthesis.
+   Verify `pi-subagents` is at least 0.34.0 and that no `subagent-result` message
+   or receipt-triggered assistant turn appears after the moderator synthesis.
 5. Run assisted draft authoring and verify plan, confirmation-gated apply, and
    status through `persona_init`. Confirm an unchanged draft is rejected for
    unresolved template placeholders before plan or apply.

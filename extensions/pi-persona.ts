@@ -33,7 +33,7 @@ import {
   parsePersonaInitArgs,
   parsePersonaOnboardArgs,
   parsePersonaNewArgs,
-  PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
   planPersonaInitFromManifest,
   resolveAgentLaunchRequest,
   resolveConsultLaunchRequest,
@@ -264,7 +264,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           throw new Error(`persona_roundtable requires active primary generalist '${roundtable.generalist.name}'`);
         }
         await assertPersonaRuntimeReady(ctx.cwd, {
-          minimumPiSubagentsVersion: PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+          minimumPiSubagentsVersion: PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
         });
         pendingRoundtable = undefined;
         progress = createRoundtableProgressReporter(onUpdate, roundtable);
@@ -641,7 +641,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         await registerProjectCommands(ctx.cwd);
         const selectionRequest = await resolveRoundtableSelectionRequest(ctx.cwd, { query });
         await assertPersonaRuntimeReady(ctx.cwd, {
-          minimumPiSubagentsVersion: PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+          minimumPiSubagentsVersion: PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
         });
         pendingRoundtable = {
           cwd: ctx.cwd,

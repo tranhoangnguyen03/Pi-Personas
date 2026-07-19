@@ -16,7 +16,7 @@ export { discoverPersonaProject } from "./agents.js";
 export {
   assertPersonaRuntimeReady,
   formatDoctorReport,
-  PI_SUBAGENTS_MANAGED_DELIVERY_VERSION,
+  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
   repairRuntimePackageDuplicates,
   runDoctor,
 } from "./doctor.js";

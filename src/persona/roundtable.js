@@ -44,7 +44,6 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
       clarify: false,
       agentScope: "both",
       context,
-      resultDelivery: "response-only",
       control: {
         enabled: false,
         notifyOn: [],

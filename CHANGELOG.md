@@ -2,6 +2,11 @@
 
 All notable changes to Pi Persona are documented here.
 
+## 0.2.1 - 2026-07-18
+
+- Restored `pi-subagents` 0.34.0 round-table compatibility and removed the
+  unsupported private delivery parameter from bridge requests.
+
 ## 0.2.0 - 2026-07-12
 
 - Made `/persona onboard` the primary resumable setup command with a default
@@ -26,9 +31,9 @@ All notable changes to Pi Persona are documented here.
   one `persona_roundtable` call runs both rounds plus synthesis, with advisory
   acceptance, correlated result extraction, phase-aware live progress, and no
   automatic runtime or inactivity cancellation after the bridge starts.
-- Added response-only bridge delivery for round-tables, runtime compatibility
-  enforcement for `pi-subagents` 0.35.0+, and deterministic rejection of known
-  unresolved onboarding placeholders during manifest and doctor validation.
+- Added in-process bridge delivery for round-tables and deterministic rejection
+  of known unresolved onboarding placeholders during manifest and doctor
+  validation.
 - Added consult-style round-table transparency with collapsed and expanded
   selection panels, accumulated per-child progress, human-readable activity,
   phase and next-step guidance, and a final execution summary.

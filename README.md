@@ -99,7 +99,7 @@ See [`init-data/README.md`](init-data/README.md) for manual manifest controls.
 ## Runtime Requirements
 
 Pi Persona requires Pi Coding Agent 0.80.6 through 0.80.x. Consults and
-round-tables require `pi-subagents` 0.35.0 or newer to be installed as a Pi
+round-tables require `pi-subagents` 0.34.0 or newer to be installed as a Pi
 package. Direct persona activation can still work without it, while doctor,
 consults, and round-tables provide installation guidance.
 
