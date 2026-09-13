@@ -143,7 +143,9 @@ export async function statusPersonaInitFromManifest(root, sourcePath) {
 export function formatPersonaInitManifestReport(result, options = {}) {
   if (result.mode === "draft" || result.mode === "resume") return formatDraftReport(result);
   if (result.mode === "status") return formatStatusReport(result);
-  const title = result.mode === "apply" ? "Pi Persona Init Applied" : "Pi Persona Init Plan";
+  const title = result.mode === "apply"
+    ? `Pi Persona Init Applied${options.needsAttention ? " — Needs Attention" : ""}`
+    : "Pi Persona Init Plan";
   const lines = [
     `# ${title}`,
     "",
@@ -197,6 +199,7 @@ export function formatPersonaInitDraftAuthoringPrompt(result) {
     "Ask one question at a time, starting with what this workspace is for and what kind of help I want from the personas.",
     "As I answer, edit the manifest for me using conservative defaults: one primary generalist, small specialists with clear routing descriptions, shared facts in docs/shared/, and specialist facts in docs/workstreams/<name>/.",
     "Do not invent secrets, private business facts, unsupported skills, runtime-only fields, or legacy tools/consults/tags metadata.",
+    "If apply succeeds but doctor reports errors, say the files were applied and onboarding needs attention; do not claim the apply was rolled back.",
     "",
     `When the manifest has enough information, call persona_init with action: plan and source: ${result.source}. Summarize that plan and ask for explicit approval. Only after approval, call persona_init with action: apply, source: ${result.source}, and confirmed: true. The apply completes docs indexing, status, doctor verification, persona listing, and primary-generalist activation. Present that result and ask what I would like help with first.`,
     "When explaining activation, use /persona use <name> or the direct slash command shown by /persona-list. Never use @name syntax.",
@@ -456,7 +459,7 @@ function normalizePathList(value, label, root) {
 function normalizeSkillList(value, label) {
   return normalizeList(value, label).map((entry) => {
     if (looksLikePath(entry)) {
-      throw new Error(`${label}: skills must be native pi-subagents skill names, not paths: ${entry}`);
+      throw new Error(`${label}: skills must be Pi skill names, not paths: ${entry}`);
     }
     return entry;
   });

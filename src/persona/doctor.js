@@ -8,25 +8,26 @@ import {
   getPrimaryGeneralistState,
   resolveWorkspacePath,
 } from "./agents.js";
+import {
+  detectDependencies,
+  isPiSubagentsPackage,
+  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
+  RUNTIME_PACKAGES,
+  runtimePackages,
+  versionAtLeast,
+} from "./dependencies.js";
 import { inspectDocPath } from "./doc-index.js";
 import { findPersonaTemplatePlaceholders } from "./init-manifest.js";
 import { validatePersonaSchema } from "./schema.js";
+import { NATIVE_BUILTIN_TOOLS, resolvePersonaBackend } from "./runtime.js";
 
-const RUNTIME_PACKAGES = {
-  piSubagents: {
-    name: "pi-subagents",
-    source: "npm:pi-subagents",
-    path: "npm/node_modules/pi-subagents",
-    missing: "pi-subagents missing; consults and round-tables are unavailable",
-  },
-};
-
-export const PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION = "0.34.0";
+export { PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION };
 
 export async function runDoctor(root, options = {}) {
-  const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
+  const backend = options.backend ?? await resolvePersonaBackend(root, options);
+  const repairs = backend === "legacy" && !options.dependencyStatus ? await repairRuntimePackageDuplicates(root) : [];
   const project = await discoverPersonaProject(root);
-  const dependencyStatus = options.dependencyStatus ?? await detectDependencies(root);
+  const dependencyStatus = options.dependencyStatus ?? (backend === "legacy" ? await detectDependencies(root) : { piSubagents: { required: false } });
   const issues = [];
 
   if (repairs.length > 0) {
@@ -35,7 +36,7 @@ export async function runDoctor(root, options = {}) {
       message: "duplicate pi-subagents configuration was repaired; reload Pi before running consults or round-tables",
     });
   }
-  collectDependencyIssues(dependencyStatus, issues);
+  if (backend === "legacy") collectDependencyIssues(dependencyStatus, issues);
   collectParseIssues(project, issues);
   issues.push(...validatePersonaSchema(project));
   collectDuplicateNameIssues(project, issues);
@@ -44,6 +45,7 @@ export async function runDoctor(root, options = {}) {
   await collectDocsIssues(project, issues);
   collectSkillsIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
+  if (backend === "native") collectNativeIssues(project, issues);
 
   const status = issues.some((issue) => issue.severity === "error")
     ? "error"
@@ -53,6 +55,7 @@ export async function runDoctor(root, options = {}) {
 
   return {
     status,
+    backend,
     root,
     dependencies: dependencyStatus,
     project,
@@ -62,6 +65,10 @@ export async function runDoctor(root, options = {}) {
 }
 
 export async function assertPersonaRuntimeReady(root, options = {}) {
+  const backend = options.backend ?? await resolvePersonaBackend(root, options);
+  if (backend === "native") {
+    return { backend };
+  }
   const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
   if (repairs.length > 0) {
     throw new Error("Pi Persona repaired duplicate pi-subagents configuration. Reload Pi, then retry.");
@@ -88,9 +95,18 @@ export function formatDoctorReport(result) {
     "# Pi Persona Doctor",
     "",
     `Status: ${result.status}`,
+    `Backend: ${result.backend ?? "legacy"}`,
     "",
     "## Dependencies",
-    dependencyLine("pi-subagents", result.dependencies.piSubagents),
+    result.backend === "native"
+      ? "- pi-subagents: optional (native backend selected)"
+      : dependencyLine("pi-subagents", result.dependencies.piSubagents),
+    ...(result.backend === "native" ? [
+      "",
+      "## Native Checks",
+      "- static doctor: resolved baseline + agent built-in tool names",
+      "- live launch preflight: loaded skills, model, provider, and current authentication",
+    ] : []),
     "",
     "## Project",
     `Agents: ${result.project.agents.length} launchable`,
@@ -129,6 +145,20 @@ export function formatDoctorReport(result) {
   return lines.join("\n");
 }
 
+function collectNativeIssues(project, issues) {
+  for (const agent of project.agents) {
+    const tools = [...new Set([...(project.baseline?.frontmatter.tools ?? []), ...(agent.tools ?? [])])];
+    const unknown = tools.filter((tool) => !NATIVE_BUILTIN_TOOLS.includes(tool));
+    if (unknown.length > 0) {
+      issues.push({
+        severity: "error",
+        file: agent.relativePath,
+        message: `${agent.relativePath}: native child cannot load unknown built-in tools: ${unknown.join(", ")}`,
+      });
+    }
+  }
+}
+
 export async function repairRuntimePackageDuplicates(root, options = {}) {
   const agentDir = options.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi/agent");
   const settings = [
@@ -142,7 +172,7 @@ export async function repairRuntimePackageDuplicates(root, options = {}) {
   const repairs = [];
 
   if (globalPackages.length > 0) {
-    const kept = globalPackages.find((entry) => entry === RUNTIME_PACKAGES.piSubagents.source) ?? globalPackages[0];
+    const kept = globalPackages.find((entry) => packageSource(entry) === RUNTIME_PACKAGES.piSubagents.source) ?? globalPackages[0];
     await repairSettingsRuntimePackages(global, kept, repairs);
     await repairSettingsRuntimePackages(project, undefined, repairs, kept);
   } else if (projectPackages.length > 1) {
@@ -150,55 +180,6 @@ export async function repairRuntimePackageDuplicates(root, options = {}) {
   }
 
   return repairs;
-}
-
-async function detectDependencies(root) {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi/agent");
-  const configuredPackages = await detectConfiguredPackages(agentDir, root);
-  return {
-    piSubagents: await detectPackage(agentDir, configuredPackages, RUNTIME_PACKAGES.piSubagents),
-  };
-}
-
-async function detectPackage(agentDir, configuredPackages, spec) {
-  const packagePath = path.join(agentDir, spec.path);
-  const configured = configuredPackages.has(spec.source);
-  try {
-    const packageJson = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf8"));
-    return {
-      ok: true,
-      version: packageJson.version ?? "unknown",
-      path: packagePath,
-      configured,
-      packageSource: spec.source,
-    };
-  } catch {
-    return {
-      ok: false,
-      path: packagePath,
-      configured,
-      packageSource: spec.source,
-    };
-  }
-}
-
-async function detectConfiguredPackages(agentDir, root) {
-  const packages = new Set([
-    ...await readSettingsPackages(path.join(agentDir, "settings.json")),
-    ...await readSettingsPackages(path.join(root, ".pi/settings.json")),
-  ]);
-  return packages;
-}
-
-async function readSettingsPackages(settingsPath) {
-  try {
-    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
-    return Array.isArray(settings.packages)
-      ? settings.packages.filter((entry) => typeof entry === "string")
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 async function readSettings(settingsPath, scope) {
@@ -209,14 +190,6 @@ async function readSettings(settingsPath, scope) {
   } catch {
     return undefined;
   }
-}
-
-function runtimePackages(packages) {
-  return Array.isArray(packages) ? packages.filter(isPiSubagentsPackage) : [];
-}
-
-function isPiSubagentsPackage(entry) {
-  return typeof entry === "string" && /(?:^|[/@:])pi-subagents(?:@[^/]+|\.git)?(?:$|[/#?])/.test(entry);
 }
 
 async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalKept = kept) {
@@ -249,6 +222,10 @@ async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalK
     kept: canonicalKept,
     removed,
   });
+}
+
+function packageSource(entry) {
+  return typeof entry === "string" ? entry : entry?.source;
 }
 
 function dependencyLine(name, dependency) {
@@ -301,17 +278,6 @@ function runtimeDependencyProblem(dependency, spec, minimumVersion) {
     return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; round-tables require >=${minimumVersion}`;
   }
   return "";
-}
-
-function versionAtLeast(actual, minimum) {
-  const actualMatch = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(actual ?? ""));
-  const minimumMatch = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(minimum ?? ""));
-  if (!actualMatch || !minimumMatch) return false;
-  for (let index = 1; index <= 3; index += 1) {
-    const difference = Number(actualMatch[index]) - Number(minimumMatch[index]);
-    if (difference !== 0) return difference > 0;
-  }
-  return minimumMatch[4] !== undefined || actualMatch[4] === undefined;
 }
 
 function collectParseIssues(project, issues) {
@@ -441,7 +407,7 @@ function collectSkillsIssues(project, issues) {
       issues.push({
         severity: "warning",
         file: entry.owner,
-        message: `${entry.owner}: skills entry looks like a path, but Pi Persona skills are native pi-subagents skill names: ${entry.skill}`,
+        message: `${entry.owner}: skills entry looks like a path, but Pi Persona skills are Pi skill names: ${entry.skill}`,
       });
     }
   }
@@ -453,7 +419,7 @@ function looksLikePath(value) {
 
 function collectLegacyMetadataIssues(project, issues) {
   for (const agent of project.agents) {
-    for (const field of ["tools", "consults", "tags"]) {
+    for (const field of ["consults", "tags"]) {
       if (!Object.hasOwn(agent.frontmatter, field)) continue;
       if ((agent.frontmatter[field] ?? []).length === 0) continue;
       const guidance = legacyGuidance(field);
@@ -468,8 +434,6 @@ function collectLegacyMetadataIssues(project, issues) {
 
 function legacyGuidance(field) {
   switch (field) {
-    case "tools":
-      return "migrate tool-use guidance to native pi-subagents skills";
     case "consults":
       return "route by agent descriptions instead";
     case "tags":

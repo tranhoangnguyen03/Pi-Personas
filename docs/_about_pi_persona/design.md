@@ -25,17 +25,30 @@ persona commands.
 `src/persona/consult.js` owns semantic consult formatting, consultant launch
 requests, answer extraction, and provenance.
 
-`src/persona/subagent-bridge.js` is transport only. It emits a bridge request,
-waits for the matching response, forwards progress, and returns raw bridge data.
+`src/persona/child-runner.js` starts and supervises one dedicated Node process
+per native task. `src/persona/child-entry.js` imports the exact Pi SDK entry
+supplied by the loaded host package, creates one restricted session, normalizes
+progress and usage, and disposes it.
+
+`src/persona/subagent-bridge.js` remains the legacy transport. It emits one
+correlated request, forwards progress, and returns raw bridge data.
 
 `src/persona/progress.js` turns observable child events into the live consult
 summary shown in the streaming `[pi-persona]` tool box.
 
 `src/persona/roundtable.js` builds the explicit multi-persona workflow.
 
-`src/persona/doctor.js`, `runtime.js`, `doc-index.js`, `scaffold.js`, and
-`init-manifest.js` provide setup, validation, dependency checks, docs catalogue
-generation, and manifest-backed initialization.
+`src/persona/runtime.js` resolves `legacy` or `native` (explicit
+`PI_PERSONA_BACKEND`/`.pi/persona.json` first, otherwise the auto-detected
+default from `dependencies.js`), creates safe fork snapshots, and retains
+legacy parameter translation. `src/persona/dependencies.js` holds the shared
+`pi-subagents` package detection used by both runtime's default-backend
+auto-detection and doctor's dependency checks, kept in its own module so
+`runtime.js` and `doctor.js` can both import it without a cyclic dependency
+(`doctor.js` already imports `runtime.js` for backend resolution).
+`src/persona/doctor.js`, `doc-index.js`, `scaffold.js`, and `init-manifest.js`
+provide setup, validation, backend-aware dependency checks, docs catalogue
+generation, and initialization.
 
 ## Resolver Contract
 
@@ -116,7 +129,7 @@ consultant receives its own resolved prompt, docs, skills, and model guidance.
 Requester docs and skills are not inherited unless they are also part of the
 consultant's baseline or persona file.
 
-The bridge response is interpreted with one fallback ladder:
+The legacy bridge response is interpreted with one fallback ladder:
 
 1. Use structured or final child output when present.
 2. Else read the output artifact path when present.
@@ -126,9 +139,15 @@ The bridge response is interpreted with one fallback ladder:
 Provenance is compact and requester-facing. The requesting persona synthesizes
 the final answer.
 
-A consult has no overall runtime deadline. The bridge cancels after three
-minutes without a matching child progress event, while each progress event
-resets that idle window. The same `[pi-persona]` box refreshes in place with
+Native receives the full `scope.prompt`, exact Pi skill paths resolved from the
+parent turn, declared doc-read guidance, and the persona's Pi built-in tools.
+The default is `read`, `grep`, `find`, and `ls`; persona metadata may select
+other Pi built-ins. Missing skills, unknown tool names, unavailable models or
+auth, and extension-registered providers fail only when that resource is used.
+
+A consult has no overall runtime deadline. Both runners cancel after three
+minutes without child activity, while child activity resets that idle window.
+The same `[pi-persona]` box refreshes in place with
 elapsed and idle time, current tool and arguments, cumulative tool categories,
 sources, turns, tokens, and reported failures; it does not publish consult
 progress to the status line or add transcript messages.
@@ -141,18 +160,39 @@ constraints, and expected output while preserving the live progress result.
 
 ## Child-Run Boundary
 
-When `PI_SUBAGENT_CHILD=1`, Pi Persona is inert. It does not register persona
-commands, `persona_consult`, direct persona bootstrap commands, or active
-persona prompt injection. A child run is already executing as a selected leaf
-persona.
+Native uses one Node child, one in-memory Pi SDK session, and one task. The
+child loads no extensions, prompt templates, themes, or automatic context
+files. It loads only exact selected skill paths. Tools default to `read`,
+`grep`, `find`, and `ls`; persona `tools` metadata may select any Pi built-in.
+Child extensions stay disabled so delegation remains leaf-only.
 
-Consult and round-table child prompts must treat the child as a leaf task. They
-must not call `persona_consult`, raw `subagent`, `subagent list`,
-`contact_supervisor`, or `intercom`. If blocked, the child reports the blocker
-in its returned answer.
+The parent passes the host SDK entry derived from Pi's `getPackageDir()`, agent
+directory, workspace, resolved model and auth, thinking level, resources, task,
+prompt, and optional branch snapshot over Node IPC. Secrets do not appear in
+argv or task text. Authentication is resolved at each launch rather than
+cached across round-table rounds. The child returns status, answer, model, and
+nested usage.
 
-This prevents nested orchestration loops and avoids relying on bridge listeners
-that are intentionally absent inside `pi-subagents` children.
+The native child is capability-limited, not sandboxed. It inherits the full
+parent environment so environment-based provider credentials continue to work,
+and it retains the parent process's filesystem permissions. The tool allowlist
+prevents normal model-driven writes and shell execution; it is not an OS-level
+security boundary.
+
+Cancellation proceeds through IPC cancel, then SIGTERM and SIGKILL after
+bounded grace periods. Session shutdown cancels every live native child. The
+child aborts and disposes its session in `finally`.
+Process exit without a result, terminal model errors, abortion, and missing
+answer text are failures. There is no cross-backend retry after work begins.
+
+For `fork`, the parent clones `ctx.sessionManager.getBranch()`, removes the
+assistant entry containing the current tool call, and freezes the snapshot once
+per workflow. The child adds a new version-3 header and restores the entries
+through `SessionManager.inMemory`. Every round-table child gets the same parent
+snapshot, not another child's history.
+
+When `PI_SUBAGENT_CHILD=1`, Pi Persona remains inert for legacy children. All
+child prompts also state that the child is a leaf task.
 
 ## Round-table Flow
 
@@ -164,18 +204,23 @@ names plus a reason for each. TypeBox validates the tool shape and Pi Persona
 validates names, uniqueness, roster size, and reasons against the active
 project; there is no heuristic fallback.
 
-After validation, Pi Persona resolves only the chosen persona scopes and sends
-one `pi-subagents` bridge request containing:
+After validation, Pi Persona resolves only the chosen persona scopes. Legacy
+sends one `pi-subagents` bridge request containing:
 
 - independent specialist positions
 - reveal and revise step
 - moderator synthesis
 
-The in-process slash bridge returns the chain result directly to Pi Persona.
-Pi Persona extracts only the current moderator synthesis, preserving native
-execution, progress, cancellation, artifacts, and child coordination without
-exposing the bridge receipt as a second verdict. Round-tables require
-`pi-subagents` 0.34.0 or newer; no private delivery parameter is sent.
+The bridge keeps the 0.34.0-0.40.x chain payload and translates the same fixed
+workflow to a foreground `workflowScript` for `pi-subagents` 0.41.0 or newer.
+Legacy consults are also explicitly foreground so bridge receipts cannot be
+mistaken for consultant answers.
+
+Native runs the same fixed workflow directly: parallel Round 1, parallel Round
+2 with ordered Round 1 answers, then one moderator session with ordered Round 2
+answers. A phase failure aborts unfinished siblings and prevents synthesis.
+Legacy extracts only the current moderator synthesis and requires
+`pi-subagents` 0.34.0 or newer.
 
 Every chain task is explicitly advisory and read-only, so analysis is not
 rejected for failing to edit files. The top-level task repeats the no-edit
@@ -195,7 +240,7 @@ Collapsed and expanded call views disclose query, context, roster, selection
 reasons, and process without exposing raw child output or runtime paths. A
 heartbeat refreshes quiet periods without adding progress messages to the
 transcript. Started round-tables disable both the
-bridge runtime deadline and inactivity cancellation; silence is displayed, not
+runtime deadline and inactivity cancellation; silence is displayed, not
 treated as permission to interrupt a diligent specialist.
 
 Round-table uses child runs because the user explicitly asked for a
@@ -215,31 +260,42 @@ onboarding alias and the older manifest slash forms remain advanced controls.
 
 `/persona doctor` validates:
 
-- `pi-subagents` is present and configured
-- project agents are discoverable and compatible with `pi-subagents`
+- the effective backend from `PI_PERSONA_BACKEND`, `.pi/persona.json`, or the
+  auto-detected default (`legacy` when `pi-subagents` is installed, `native`
+  otherwise)
+- `pi-subagents` is present, configured, and new enough when legacy is selected
+- project agents are discoverable
 - names, descriptions, roles, models, booleans, and list fields have valid types
 - exactly one primary generalist exists
 - docs paths remain inside the physical workspace, including through symlinks,
   and exist when required
 - nested docs directories have `_index.md` guidance
-- native skill names are used instead of path-style skill entries
+- Pi skill names are used instead of path-style skill entries
 - legacy metadata is reported as migration guidance
 - runtime support roles carry useful provenance where possible
+- resolved baseline-plus-agent tools name Pi built-ins available to the native child
 
-Before validation, doctor and orchestration preflight automatically normalize
+Doctor's project and native-tool checks are static. Exact loaded skills, model
+selection, extension-registered providers, and current credentials are live
+session state and remain launch-time preflight checks. Pi 0.85.1 is the tested
+baseline, not a runtime version gate. Wildcard Pi peer declarations follow Pi
+package guidance; actual SDK failures are reported without automatic reruns.
+
+On legacy only, doctor and orchestration preflight automatically normalize
 duplicate `pi-subagents` declarations across global and project settings. The
 global declaration wins, changed files receive `.pi-personas.bak` backups, and
 the current orchestration pauses for one reload so already-loaded duplicate
 listeners cannot launch the same child twice.
 
-Consult and round-table commands also run a runtime preflight before bridge
-execution so missing dependencies produce guidance instead of a timeout.
+Consult and round-table commands freeze backend selection and run its preflight
+before execution. Native round-tables preflight every selected persona resource
+before the first child starts.
 
 ## Global Subagent List
 
-`subagent list` lists global Pi subagents. It can include builtins, package
-agents, and project `.pi/agents` files. This is useful Pi runtime behavior, but
-it is not the Pi Persona consultant list.
+`subagent list` may be provided by an installed subagent package. It can include
+builtins, package agents, and project `.pi/agents` files, but it is not the Pi
+Persona consultant list and native does not use it.
 
 Pi Persona's consultant roster comes from project agents resolved in the active
 workspace. Users can inspect that roster with `/persona-list`.
@@ -254,11 +310,15 @@ Tests should protect the public runtime boundaries:
 - active persona state is stored, restored, displayed, and clearable
 - footer status uses `pi-persona-active`
 - consults use `persona_consult`, not raw subagent discovery
-- runtime preflight reports missing or unconfigured `pi-subagents`
+- runtime preflight reports the backend and requires `pi-subagents` only for legacy
+- native execution uses the supplied host SDK entry, exact skills, declared Pi
+  built-in tools, normalized progress, usage, cancellation, and terminal-answer checks
+- fork snapshots exclude the in-flight tool call and abandoned branches
 - canonical `/persona use` works when aliases are unavailable
-- round-table selection is a primary-generalist `persona_roundtable` tool call,
-  exactly one bridge request is emitted, and the deliberation chain contains
-  only selected specialists
+- round-table selection is a primary-generalist `persona_roundtable` tool call;
+  legacy emits one bridge request, while native runs only the selected
+  specialists in two phases before synthesis
+- native phase failure prevents synthesis and never triggers legacy fallback
 - manifest apply is confirmation-gated through `persona_init`
 - model-driven manifest apply includes doctor verification before success is
   reported

@@ -2,6 +2,21 @@
 
 All notable changes to Pi Persona are documented here.
 
+## Unreleased
+
+- Added a private Pi child runner, tested with Pi 0.85.1, for consultations and fixed
+  round-tables. With no explicit `PI_PERSONA_BACKEND` or `.pi/persona.json`
+  backend, Pi Persona now defaults to `legacy` when `pi-subagents` is
+  installed and to `native` otherwise; explicit selection and startup
+  validation for invalid or missing backends are unchanged.
+- Added exact skill and declared built-in tool controls, active-branch fork snapshots,
+  normalized progress and usage, cancellation escalation, and phase-stop
+  behavior without automatic cross-backend retries.
+- Updated Pi package dependency ownership, type checking, doctor output,
+  onboarding guidance, and maintainer/release documentation for Pi 0.85.1.
+- Kept legacy consults foreground-only and adapted round-tables to the current
+  `pi-subagents` workflow API while retaining the 0.34.0 chain path.
+
 ## 0.2.1 - 2026-07-18
 
 - Restored `pi-subagents` 0.34.0 round-table compatibility and removed the
