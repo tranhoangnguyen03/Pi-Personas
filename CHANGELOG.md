@@ -2,7 +2,7 @@
 
 All notable changes to Pi Persona are documented here.
 
-## Unreleased
+## 0.3.0 - 2026-09-14
 
 - Added a private Pi child runner, tested with Pi 0.85.1, for consultations and fixed
   round-tables. With no explicit `PI_PERSONA_BACKEND` or `.pi/persona.json`

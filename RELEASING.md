@@ -53,13 +53,26 @@ after uninstalling `pi-subagents`, it reports `native`:
 
 ## Publish
 
-After the automated and manual gates pass:
+Releases are automated by `.github/workflows/release.yml`. When a PR merges to
+`main`, CI runs `npm ci`, `npm test`, `npm audit --omit=dev`, and
+`npm pack --dry-run`; on success the workflow tags `v<version>`, publishes to
+npm with provenance, and creates a GitHub release whose notes come from the
+matching `## [version]` CHANGELOG section. Every step is idempotent: merging
+without a version bump is a no-op, and a re-run resumes at the first missing
+artifact.
 
-```sh
-npm version <patch|minor|major>
-npm publish --access public
-git push --follow-tags
-```
+To release a version, bump `package.json` (run `npm install` to sync the
+lockfile), add a `## [version]` CHANGELOG section, and merge the PR.
 
-Publishing and pushing are intentional maintainer actions; the test and release
-scripts do not mutate npm or GitHub state.
+### One-time setup: npm trusted publishing
+
+No `NPM_TOKEN` secret is stored. Publishing authenticates through GitHub
+Actions OIDC. On npmjs.com, open the `pi-personas` package settings and add a
+trusted publisher for this repository with workflow filename `release.yml`.
+Verify the wiring any time with **Actions → release → Run workflow →
+verify_only**; the `oidc-check` job must live in `release.yml` because npm
+binds trusted publishers to the workflow filename.
+
+Manual publishing from a checkout remains possible for emergencies
+(`npm publish --access public && git push --follow-tags`) but bypasses the
+automated gates.
