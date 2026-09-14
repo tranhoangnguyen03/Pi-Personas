@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { promisify } from "node:util";
@@ -9,6 +10,7 @@ import { promisify } from "node:util";
 import {
   buildAgentLaunchRequest,
   buildConsultEnvelope,
+  buildLegacyRoundtableParams,
   createDocsIndex,
   createPersonaInitDraft,
   createPersonaProjectScaffold,
@@ -48,7 +50,12 @@ import {
   runSubagentBridgeRequest,
   runDoctor,
   repairRuntimePackageDuplicates,
+  resolveNativeChildTools,
+  resolvePersonaBackend,
+  runNativeRoundtable,
+  runPersonaChild,
   sendPersonaOutput,
+  snapshotForkBranch,
 } from "../src/persona/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -196,6 +203,19 @@ async function createExtensionHarness(cwd, options = {}) {
   };
   const ctx = {
     cwd,
+    model: options.model ?? { provider: "anthropic", id: "pi-persona-test-model" },
+    thinkingLevel: options.thinkingLevel ?? "low",
+    modelRegistry: options.modelRegistry ?? {
+      getAll() {
+        return [ctx.model];
+      },
+      getRegisteredProviderIds() {
+        return [];
+      },
+      async getApiKeyAndHeaders() {
+        return { ok: true, apiKey: "test-key" };
+      },
+    },
     ui: {
       notify(message, level) {
         notifications.push({ message, level });
@@ -212,6 +232,7 @@ async function createExtensionHarness(cwd, options = {}) {
     isIdle() {
       return true;
     },
+    isProjectTrusted: options.isProjectTrusted ?? (() => true),
   };
 
   registerPiPersona(pi);
@@ -288,6 +309,7 @@ test("package manifest exposes Pi Persona as a Pi extension package", async () =
 test("package tarball excludes local runtime state and tests", async () => {
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
     cwd: process.cwd(),
+    env: { ...process.env, NPM_CONFIG_CACHE: path.join(tmpdir(), "pi-persona-npm-cache") },
     maxBuffer: 1024 * 1024,
   });
   const [packed] = JSON.parse(stdout);
@@ -314,10 +336,320 @@ test("runtime Pi packages are optional peers for plain npm installs", async () =
   const manifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
 
   assert.equal(manifest.peerDependencies["pi-intercom"], undefined);
-  assert.equal(manifest.peerDependencies["pi-subagents"], ">=0.34.0");
-  assert.equal(manifest.peerDependenciesMeta["pi-subagents"].optional, true);
+  assert.equal(manifest.peerDependencies["@earendil-works/pi-coding-agent"], "*");
+  assert.equal(manifest.peerDependencies["@earendil-works/pi-tui"], "*");
+  assert.equal(manifest.peerDependencies.typebox, "*");
+  assert.equal(manifest.peerDependencies["pi-subagents"], undefined);
+  assert.equal(manifest.peerDependenciesMeta["pi-subagents"], undefined);
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.publishConfig.access, "public");
+});
+
+test("resolvePersonaBackend explicit selection wins over auto-detection", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-"));
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+  assert.equal(await resolvePersonaBackend(root, { env: {} }), "native");
+  assert.equal(await resolvePersonaBackend(root, { env: { PI_PERSONA_BACKEND: "legacy" } }), "legacy");
+  await assert.rejects(
+    () => resolvePersonaBackend(root, { env: { PI_PERSONA_BACKEND: "automatic" } }),
+    /must be 'legacy' or 'native'/,
+  );
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "automatic" })}\n`);
+  await assert.rejects(
+    () => resolvePersonaBackend(root, { env: {} }),
+    /must be 'legacy' or 'native'/,
+  );
+});
+
+test("resolvePersonaBackend rejects malformed project backend configuration", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-malformed-"));
+  await writeText(path.join(root, ".pi/persona.json"), '"native"\n');
+  await assert.rejects(() => resolvePersonaBackend(root, { env: {} }), /.pi\/persona.json must contain a JSON object/);
+});
+
+test("resolvePersonaBackend defaults to legacy when pi-subagents is installed and native otherwise", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-default-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(await resolvePersonaBackend(root, { env: {} }), "native");
+
+    await writeText(
+      path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+      `${JSON.stringify({ version: "0.35.0" })}\n`,
+    );
+    assert.equal(await resolvePersonaBackend(root, { env: {} }), "legacy");
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("backend detection follows Pi project-local and versioned package installs", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-local-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(root, ".pi/npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "0.67.0" })}\n`,
+  );
+  await writeText(path.join(root, ".pi/settings.json"), `${JSON.stringify({
+    packages: [{ source: "npm:pi-subagents@0.67.0", extensions: ["extensions/*.ts"] }],
+  })}\n`);
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(await resolvePersonaBackend(root, { env: {} }), "legacy");
+    const ready = await assertPersonaRuntimeReady(root);
+    assert.equal(ready.piSubagents.version, "0.67.0");
+    assert.equal(ready.piSubagents.configured, true);
+    assert.equal(ready.piSubagents.path, path.join(root, ".pi/npm/node_modules/pi-subagents"));
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("backend detection reports a corrupt installed pi-subagents package", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-corrupt-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(path.join(agentDir, "npm/node_modules/pi-subagents/package.json"), "{broken\n");
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await assert.rejects(() => resolvePersonaBackend(root, { env: {} }), /Cannot read installed pi-subagents/);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("explicit .pi/persona.json and PI_PERSONA_BACKEND override auto-detection in both directions", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-override-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "0.35.0" })}\n`,
+  );
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(await resolvePersonaBackend(root, { env: {} }), "legacy");
+
+    await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+    assert.equal(await resolvePersonaBackend(root, { env: {} }), "native");
+    assert.equal(await resolvePersonaBackend(root, { env: { PI_PERSONA_BACKEND: "legacy" } }), "legacy");
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("explicit legacy backend still errors when pi-subagents is missing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-explicit-legacy-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "legacy" })}\n`);
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await assert.rejects(() => assertPersonaRuntimeReady(root), /pi-subagents is missing/);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("explicit native backend works even when legacy pi-subagents is installed", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-explicit-native-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "0.35.0" })}\n`,
+  );
+  await writeText(path.join(agentDir, "settings.json"), `${JSON.stringify({ packages: ["npm:pi-subagents"] })}\n`);
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const ready = await assertPersonaRuntimeReady(root);
+    assert.deepEqual(ready, { backend: "native" });
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("default legacy selection from installed pi-subagents never silently falls back to native at execution", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-backend-no-fallback-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  await writeText(
+    path.join(agentDir, "npm/node_modules/pi-subagents/package.json"),
+    `${JSON.stringify({ version: "0.35.0" })}\n`,
+  );
+
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const backend = await resolvePersonaBackend(root, { env: {} });
+    assert.equal(backend, "legacy");
+    await assert.rejects(
+      () => assertPersonaRuntimeReady(root, { backend }),
+      /installed but not configured in Pi settings/,
+    );
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
+});
+
+test("fork snapshots keep the active branch but remove the in-flight tool call", () => {
+  const branch = [
+    { type: "message", id: "user", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "Question" }], timestamp: 1 } },
+    { type: "thinking_level_change", id: "thinking", parentId: "user", timestamp: "2026-01-01T00:00:01.000Z", thinkingLevel: "low" },
+    { type: "message", id: "assistant", parentId: "thinking", timestamp: "2026-01-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "I will consult." }, { type: "toolCall", id: "call-1", name: "persona_consult", arguments: { consultant: "brand" } }], api: "anthropic-messages", provider: "anthropic", model: "test", usage: {}, stopReason: "toolUse", timestamp: 2 } },
+  ];
+  assert.deepEqual(snapshotForkBranch({ getBranch: () => branch }, "call-1"), branch.slice(0, 2));
+  assert.notEqual(snapshotForkBranch({ getBranch: () => branch }, "call-1")[0], branch[0]);
+  assert.throws(
+    () => snapshotForkBranch({ getBranch: () => branch }, "missing-call"),
+    /could not find the triggering tool call 'missing-call'/,
+  );
+});
+
+test("native child loads the supplied SDK entry and returns normalized progress and usage", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-child-"));
+  const sdkPath = path.join(root, "sdk.mjs");
+  const disposedPath = path.join(root, "disposed");
+  await writeText(sdkPath, `
+import { writeFile } from "node:fs/promises";
+setInterval(() => {}, 1000);
+export const getAgentDir = () => ${JSON.stringify(root)};
+export class AuthStorage { static inMemory(data) { return { data }; } }
+export class SettingsManager { static create(cwd, agentDir, options) { return { cwd, agentDir, options }; } }
+export class DefaultResourceLoader {
+  constructor(options) { this.options = options; }
+  async reload() {}
+  getSkills() { return { skills: [], diagnostics: [] }; }
+}
+export class ModelRuntime { static async create() { return new ModelRuntime(); } async setRuntimeApiKey() {} }
+export const resolveCliModel = ({ cliModel, cliThinking }) => {
+  const [provider, id] = cliModel.split("/");
+  return { model: { provider, id, baseUrl: "https://example.test" }, thinkingLevel: cliThinking };
+};
+export class SessionManager {
+  static inMemory(cwd, options, entries = []) { return { cwd, options, entries }; }
+}
+export async function createAgentSession(options) {
+  const listeners = new Set();
+  let release;
+  const usage = { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const answer = JSON.stringify({ tools: options.tools, noExtensions: options.resourceLoader.options.noExtensions, entries: options.sessionManager.entries.length, projectTrusted: options.settingsManager.options.projectTrusted, thinkingLevel: options.thinkingLevel });
+  const assistant = { role: "assistant", content: [{ type: "text", text: answer }], stopReason: "stop", usage };
+  return { session: {
+    messages: [assistant],
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    async prompt(task) {
+      if (task === "hang") await new Promise((resolve) => { release = resolve; });
+      for (const listener of listeners) listener({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "README.md" } });
+      for (const listener of listeners) listener({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: {}, isError: false });
+      for (const listener of listeners) listener({ type: "turn_end", message: assistant });
+    },
+    getLastAssistantText() { return answer; },
+    async abort() { release?.(); },
+    async dispose() { await writeFile(${JSON.stringify(disposedPath)}, "disposed"); },
+  } };
+}
+`);
+  const updates = [];
+  process.execArgv.push("--input-type=module");
+  let result;
+  try {
+    result = await runPersonaChild({
+      cwd: root,
+      agentDir: root,
+      sdkEntry: pathToFileURL(sdkPath).href,
+      projectTrusted: true,
+      personaName: "reviewer",
+      systemPrompt: "Review carefully.",
+      task: "Review.",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "low",
+      auth: { apiKey: "private" },
+      skillNames: [],
+      skillPaths: [],
+      tools: ["read", "grep", "find", "ls"],
+      context: "fork",
+      branch: [{ type: "session" }, { type: "message" }],
+    }, { index: 4, onUpdate: (update) => updates.push(update) });
+  } finally {
+    process.execArgv.pop();
+  }
+
+  assert.deepEqual(JSON.parse(result.text), { tools: ["read", "grep", "find", "ls"], noExtensions: true, entries: 3, projectTrusted: true, thinkingLevel: "low" });
+  assert.equal(result.usage.totalTokens, 5);
+  assert.ok(updates.some((update) => update.progress[0].currentTool === "read"));
+  assert.ok(updates.some((update) => update.progress[0].recentTools?.[0]?.args === JSON.stringify({ path: "README.md" })));
+  assert.ok(updates.every((update) => update.progress[0].index === 4));
+  assert.equal(await readFile(disposedPath, "utf8"), "disposed");
+
+  const controller = new AbortController();
+  const cancelled = runPersonaChild({
+    cwd: root,
+    agentDir: root,
+    sdkEntry: pathToFileURL(sdkPath).href,
+    projectTrusted: true,
+    personaName: "reviewer",
+    systemPrompt: "Review carefully.",
+    task: "hang",
+    model: { provider: "test", id: "model" },
+    thinkingLevel: "low",
+    auth: {},
+    skillNames: [],
+    skillPaths: [],
+    tools: ["read"],
+    context: "fresh",
+    branch: [],
+  }, {
+    signal: controller.signal,
+    onUpdate(update) {
+      if (update.progress[0].status === "running") controller.abort();
+    },
+  });
+  await assert.rejects(cancelled, /was cancelled/);
+
+  const aborted = AbortSignal.abort();
+  await assert.rejects(
+    () => runPersonaChild(new Proxy({}, { get() { throw new Error("request was inspected"); } }), { signal: aborted }),
+    /was cancelled/,
+  );
+});
+
+test("native child startup timeout covers SDK initialization", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-child-startup-"));
+  const sdkPath = path.join(root, "sdk.mjs");
+  await writeText(sdkPath, "await new Promise(() => {});\n");
+
+  await assert.rejects(
+    () => runPersonaChild({
+      cwd: root,
+      sdkEntry: pathToFileURL(sdkPath).href,
+      personaName: "reviewer",
+      systemPrompt: "Review.",
+      task: "Review.",
+      model: { provider: "test", id: "model" },
+      skillNames: [],
+      skillPaths: [],
+      tools: ["read"],
+      context: "fresh",
+      branch: [],
+    }, { startTimeoutMs: 25 }),
+    /did not start/,
+  );
 });
 
 test("README gives new users one project-local onboarding path", async () => {
@@ -446,12 +778,13 @@ test("extension exposes model-callable manifest planning and confirmation-gated 
   assert.equal(plan.details.mode, "plan");
   assert.match(plan.content[0].text, /Pi Persona Init Plan/);
 
-  const unconfirmed = await tool.execute("apply", {
-    action: "apply",
-    source: draft.source,
-  }, undefined, undefined, harness.ctx);
-  assert.equal(unconfirmed.isError, true);
-  assert.match(unconfirmed.content[0].text, /requires confirmed: true/);
+  await assert.rejects(
+    () => tool.execute("apply", {
+      action: "apply",
+      source: draft.source,
+    }, undefined, undefined, harness.ctx),
+    /requires confirmed: true/,
+  );
 
   const applied = await tool.execute("apply", {
     action: "apply",
@@ -470,6 +803,25 @@ test("extension exposes model-callable manifest planning and confirmation-gated 
     "example-specialist",
     "generalist",
   ]);
+});
+
+test("manifest apply reports completed writes that still need doctor attention", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-persona-needs-attention-"));
+  await writeText(path.join(root, "init-data/setup.yaml"), starterInitManifest());
+  await writeText(path.join(root, ".pi/agents/broken.md"), "---\nname: broken\n---\nBroken.\n");
+  const harness = await createExtensionHarness(root);
+
+  const result = await harness.tools.get("persona_init").execute("apply", {
+    action: "apply",
+    source: "init-data/setup.yaml",
+    confirmed: true,
+  }, undefined, undefined, harness.ctx);
+
+  assert.equal(result.details.doctor.status, "error");
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0].text, /Pi Persona Init Applied — Needs Attention/);
+  assert.match(result.content[0].text, /Onboarding needs attention/);
+  assert.doesNotMatch(result.content[0].text, /rolled back/i);
 });
 
 test("extension registers the persona_consult tool", async () => {
@@ -611,6 +963,8 @@ test("extension direct persona commands activate the current chat instead of the
   assert.match(commandBlock, /sendUserMessage/);
   assert.doesNotMatch(commandBlock, /runSubagentBridgeRequest/);
   assert.match(source, /before_agent_start/);
+  assert.match(source, /session_shutdown/);
+  assert.match(source, /cancelPersonaChildren/);
   assert.match(source, /\/persona status/);
   assert.match(source, /\/persona clear/);
 });
@@ -637,14 +991,127 @@ test("persona consult requires and matches the active requester", async () => {
     summary: "Focused context.",
   };
 
-  const inactive = await tool.execute("consult", params, undefined, undefined, harness.ctx);
-  assert.equal(inactive.isError, true);
-  assert.match(inactive.content[0].text, /requires an active persona/);
+  await assert.rejects(
+    () => tool.execute("consult", params, undefined, undefined, harness.ctx),
+    /requires an active persona/,
+  );
 
   await harness.commands.get("generalist").handler("", harness.ctx);
-  const mismatch = await tool.execute("consult", params, undefined, undefined, harness.ctx);
-  assert.equal(mismatch.isError, true);
-  assert.match(mismatch.content[0].text, /requester must match active persona 'generalist'/);
+  await assert.rejects(
+    () => tool.execute("consult", params, undefined, undefined, harness.ctx),
+    /requester must match active persona 'generalist'/,
+  );
+});
+
+test("native consult uses live extension context and reaches the real child SDK path", async (t) => {
+  const root = await createCommandWorkspace("brand");
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi-agent");
+  t.after(() => {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  });
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+  let authCalls = 0;
+  let trustCalls = 0;
+  const model = { provider: "pi-persona-missing-provider", id: "missing-model" };
+  const harness = await createExtensionHarness(root, {
+    model,
+    thinkingLevel: "high",
+    isProjectTrusted() {
+      trustCalls += 1;
+      return true;
+    },
+    modelRegistry: {
+      getAll: () => [model],
+      getRegisteredProviderIds: () => [],
+      async getApiKeyAndHeaders(selected) {
+        authCalls += 1;
+        assert.equal(selected, model);
+        return { ok: true, env: { PI_PERSONA_TEST_API_KEY: "test-key" } };
+      },
+    },
+  });
+  await harness.commands.get("generalist").handler("", harness.ctx);
+  await harness.handlers.get("before_agent_start")({ systemPrompt: "base", systemPromptOptions: { skills: [] } }, harness.ctx);
+
+  await assert.rejects(
+    () => harness.tools.get("persona_consult").execute("native-consult", {
+      requester: "generalist",
+      consultant: "brand",
+      question: "Review this.",
+      summary: "Focused context.",
+    }, undefined, undefined, harness.ctx),
+    /model/i,
+  );
+  assert.equal(authCalls, 1);
+  assert.equal(trustCalls, 1);
+});
+
+test("native child tools default read-only and accept declared Pi built-ins", () => {
+  assert.deepEqual(resolveNativeChildTools([]), ["read", "grep", "find", "ls"]);
+  assert.deepEqual(resolveNativeChildTools(["read", "bash", "edit", "write"]), ["read", "bash", "edit", "write"]);
+  assert.throws(() => resolveNativeChildTools(["web_search"]), /unknown built-in tools: web_search/);
+});
+
+test("native consult preflight accepts declared Pi built-in tools and rejects only unavailable resources", async (t) => {
+  await t.test("declared built-in tools", async () => {
+    const root = await createCommandWorkspace("brand");
+    await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+    await writeText(path.join(root, ".pi/agents/_baseline.md"), "---\ntools: bash, edit, write\n---\nBaseline.\n");
+    const source = await readFile(path.join(process.cwd(), "extensions/pi-persona.ts"), "utf8");
+    assert.doesNotMatch(source, /supports read-only child tools; unsupported/);
+  });
+
+  await t.test("missing loaded skill", async () => {
+    const root = await createCommandWorkspace("brand");
+    await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+    await writeText(path.join(root, ".pi/agents/_baseline.md"), "---\nskills: required-skill\n---\nBaseline.\n");
+    const harness = await createExtensionHarness(root);
+    await harness.commands.get("generalist").handler("", harness.ctx);
+    await assert.rejects(
+      () => harness.tools.get("persona_consult").execute("skill", { requester: "generalist", consultant: "brand", question: "Review.", summary: "Context." }, undefined, undefined, harness.ctx),
+      /exactly one loaded Pi skill named 'required-skill'/,
+    );
+  });
+
+  await t.test("extension provider", async () => {
+    const root = await createCommandWorkspace("brand");
+    await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+    const model = { provider: "extension-provider", id: "model" };
+    const harness = await createExtensionHarness(root, {
+      model,
+      modelRegistry: {
+        getAll: () => [model],
+        getRegisteredProviderIds: () => [model.provider],
+        getApiKeyAndHeaders: async () => ({ ok: true }),
+      },
+    });
+    await harness.commands.get("generalist").handler("", harness.ctx);
+    await assert.rejects(
+      () => harness.tools.get("persona_consult").execute("provider", { requester: "generalist", consultant: "brand", question: "Review.", summary: "Context." }, undefined, undefined, harness.ctx),
+      /cannot use extension-registered provider/,
+    );
+  });
+
+  await t.test("authentication", async () => {
+    const root = await createCommandWorkspace("brand");
+    await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+    const model = { provider: "anthropic", id: "model" };
+    const harness = await createExtensionHarness(root, {
+      model,
+      modelRegistry: {
+        getAll: () => [model],
+        getRegisteredProviderIds: () => [],
+        getApiKeyAndHeaders: async () => ({ ok: false, error: "login required" }),
+      },
+    });
+    await harness.commands.get("generalist").handler("", harness.ctx);
+    await assert.rejects(
+      () => harness.tools.get("persona_consult").execute("auth", { requester: "generalist", consultant: "brand", question: "Review.", summary: "Context." }, undefined, undefined, harness.ctx),
+      /login required/,
+    );
+  });
 });
 
 test("extension bootstraps /generalist before project agents exist", async () => {
@@ -805,18 +1272,19 @@ test("roundtable command delegates selection to the primary generalist and the t
   assert.equal(requests.length, 0);
 
   const tool = harness.tools.get("persona_roundtable");
-  const mismatch = await tool.execute(
-    "roundtable-mismatch",
-    {
-      query: "A different query",
-      selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
-    },
-    undefined,
-    undefined,
-    harness.ctx,
+  await assert.rejects(
+    () => tool.execute(
+      "roundtable-mismatch",
+      {
+        query: "A different query",
+        selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
+      },
+      undefined,
+      undefined,
+      harness.ctx,
+    ),
+    /query must match.*unchanged/,
   );
-  assert.equal(mismatch.isError, true);
-  assert.match(mismatch.content[0].text, /query must match.*unchanged/);
   assert.equal(requests.length, 0);
 
   const result = await tool.execute(
@@ -845,19 +1313,58 @@ test("roundtable command delegates selection to the primary generalist and the t
   assert.equal(result.details.process.completedSteps, 5);
   assert.equal(result.details.process.expectedSteps, 5);
 
-  const repeated = await tool.execute(
-    "roundtable-repeat",
-    {
-      query: "Compare Gemma models",
-      selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
-    },
-    undefined,
-    undefined,
-    harness.ctx,
+  await assert.rejects(
+    () => tool.execute(
+      "roundtable-repeat",
+      {
+        query: "Compare Gemma models",
+        selections: [{ name: "brand", reason: "Compare positioning trade-offs." }],
+      },
+      undefined,
+      undefined,
+      harness.ctx,
+    ),
+    /requires a pending \/persona-roundtable request/,
   );
-  assert.equal(repeated.isError, true);
-  assert.match(repeated.content[0].text, /requires a pending \/persona-roundtable request/);
   assert.equal(requests.length, 1);
+});
+
+test("native roundtable resolves authentication again for each child launch", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+  let authCalls = 0;
+  const model = { provider: "pi-persona-missing-provider", id: "missing-model" };
+  const harness = await createExtensionHarness(root, {
+    model,
+    modelRegistry: {
+      getAll: () => [model],
+      getRegisteredProviderIds: () => [],
+      async getApiKeyAndHeaders() {
+        authCalls += 1;
+        return { ok: true };
+      },
+    },
+  });
+  await harness.commands.get("persona-roundtable").handler("Compare options", harness.ctx);
+  await harness.handlers.get("before_agent_start")({
+    systemPrompt: "base",
+    systemPromptOptions: {
+      skills: ["shared-skill", "brand-skill", "guideline-skill"].map((name) => ({ name, filePath: path.join(root, "missing", name, "SKILL.md") })),
+    },
+  }, harness.ctx);
+
+  await assert.rejects(
+    () => harness.tools.get("persona_roundtable").execute("native-roundtable", {
+      query: "Compare options",
+      selections: [
+        { name: "brand", reason: "Brand view." },
+        { name: "guideline", reason: "Guideline view." },
+      ],
+    }, undefined, undefined, harness.ctx),
+    /stopped during Round 1/,
+  );
+
+  assert.equal(authCalls, 5);
 });
 
 test("extension stores active persona state for direct persona mode", async () => {
@@ -907,7 +1414,7 @@ test("active persona prompt treats raw subagent discovery as outside persona con
   assert.match(launch.systemPrompt, /persona_consult/);
   assert.match(launch.systemPrompt, /Known personas:/);
   assert.match(launch.systemPrompt, /Do not use raw `subagent list` to discover Pi Persona consultants/);
-  assert.match(launch.systemPrompt, /Raw `subagent` launches are global Pi runtime behavior/);
+  assert.match(launch.systemPrompt, /Raw `subagent` launches bypass Pi Persona consult semantics/);
 });
 
 test("docs document active persona footer and global subagent list behavior", async () => {
@@ -1041,7 +1548,7 @@ test("agent scaffold marks first generalist primary and later generalists non-pr
   assert.match(formatAgentScaffoldCreatedMessage(second), /backup-generalist/);
 });
 
-test("doctor reports legacy tools consults and tags as migration warnings", async () => {
+test("doctor treats tools as runtime metadata and flags only legacy routing metadata", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/legacy.md"), `---
@@ -1056,6 +1563,7 @@ Legacy prompt.
 `);
 
   const result = await runDoctor(root, {
+    backend: "legacy",
     dependencyStatus: {
       piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
@@ -1063,7 +1571,7 @@ Legacy prompt.
   });
 
   assert.equal(result.status, "warning");
-  assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tools found; migrate tool-use guidance to native pi-subagents skills")));
+  assert.ok(!result.issues.some((issue) => issue.message.includes("legacy field tools")));
   assert.ok(result.issues.some((issue) => issue.message.includes("legacy field consults found; route by agent descriptions instead")));
   assert.ok(result.issues.some((issue) => issue.message.includes("legacy field tags found; prefer high-signal descriptions")));
 });
@@ -1166,6 +1674,20 @@ test("runtime duplicate repair keeps one global pi-subagents package and preserv
   assert.deepEqual(await repairRuntimePackageDuplicates(root, { agentDir }), []);
 });
 
+test("runtime duplicate repair supports object-form Pi package settings", async () => {
+  const root = await createWorkspace();
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
+  const settingsPath = path.join(agentDir, "settings.json");
+  const canonical = { source: "npm:pi-subagents", extensions: ["extensions/*.ts"] };
+  const pinned = { source: "npm:pi-subagents@0.67.0", extensions: [] };
+  await writeText(settingsPath, `${JSON.stringify({ packages: [pinned, canonical, "npm:other"] }, null, 2)}\n`);
+
+  const repairs = await repairRuntimePackageDuplicates(root, { agentDir });
+
+  assert.equal(repairs.length, 1);
+  assert.deepEqual((await readJson(settingsPath)).packages, [canonical, "npm:other"]);
+});
+
 test("runtime preflight repairs duplicates before a consult can launch", async () => {
   const root = await createWorkspace();
   const agentDir = await mkdtemp(path.join(tmpdir(), "pi-persona-agent-dir-"));
@@ -1231,6 +1753,7 @@ test("doctor warns but keeps direct mode available when pi-subagents is missing"
   const root = await createWorkspace();
 
   const result = await runDoctor(root, {
+    backend: "legacy",
     dependencyStatus: {
       piSubagents: { ok: false, path: "/tmp/pi-subagents" },
       piIntercom: { ok: false, path: "/tmp/pi-intercom" },
@@ -1241,10 +1764,35 @@ test("doctor warns but keeps direct mode available when pi-subagents is missing"
   assert.ok(result.issues.some((issue) => issue.severity === "warning" && issue.message.includes("pi-subagents missing; consults and round-tables are unavailable")));
 });
 
+test("doctor does not require pi-subagents for the native backend", async () => {
+  const root = await createWorkspace();
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+  const result = await runDoctor(root);
+
+  assert.equal(result.backend, "native");
+  assert.ok(!result.issues.some((issue) => issue.message.includes("pi-subagents missing")));
+  assert.match(formatDoctorReport(result), /Backend: native/);
+  assert.match(formatDoctorReport(result), /pi-subagents: optional/);
+  assert.match(formatDoctorReport(result), /static doctor: resolved baseline \+ agent built-in tool names/);
+  assert.match(formatDoctorReport(result), /live launch preflight: loaded skills, model, provider, and current authentication/);
+});
+
+test("native doctor does not reject declared built-in tools or other Pi versions", async () => {
+  const root = await createCommandWorkspace("brand");
+  await writeText(path.join(root, ".pi/persona.json"), `${JSON.stringify({ backend: "native" })}\n`);
+  await writeText(path.join(root, ".pi/agents/_baseline.md"), "---\ntools: bash\n---\nBaseline.\n");
+  await writeText(path.join(root, ".pi/agents/brand.md"), "---\nname: brand\nrole: specialist\ndescription: Brand.\ntools: write\n---\nBrand.\n");
+
+  const result = await runDoctor(root);
+  assert.ok(!result.issues.some((issue) => issue.message.includes("unsupported tools") || issue.message.includes("requires tested Pi")));
+  assert.deepEqual(await assertPersonaRuntimeReady(root, { backend: "native" }), { backend: "native" });
+});
+
 test("doctor warns when runtime packages are installed but not configured", async () => {
   const root = await createWorkspace();
 
   const result = await runDoctor(root, {
+    backend: "legacy",
     dependencyStatus: {
       piSubagents: { ok: true, configured: false, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
       piIntercom: { ok: true, configured: false, version: "0.6.0", path: "/tmp/pi-intercom", packageSource: "npm:pi-intercom" },
@@ -1259,6 +1807,7 @@ test("doctor warns when runtime packages are installed but not configured", asyn
 test("runtime dependency preflight returns install and configuration guidance", async () => {
   await assert.rejects(
     () => assertPersonaRuntimeReady("/tmp/example", {
+      backend: "legacy",
       dependencyStatus: {
         piSubagents: { ok: true, configured: false, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
         piIntercom: { ok: false, configured: false, path: "/tmp/pi-intercom", packageSource: "npm:pi-intercom" },
@@ -1280,10 +1829,11 @@ test("doctor accepts pi-subagents 0.34 for round-table delivery", async () => {
     piSubagents: { ok: true, configured: true, version: "0.34.0", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
   };
 
-  const doctor = await runDoctor(root, { dependencyStatus });
+  const doctor = await runDoctor(root, { backend: "legacy", dependencyStatus });
   assert.equal(doctor.status, "pass");
   assert.doesNotMatch(formatDoctorReport(doctor), /managed round-table|0\.35\.0/);
   await assert.doesNotReject(() => assertPersonaRuntimeReady(root, {
+    backend: "legacy",
     dependencyStatus,
     minimumPiSubagentsVersion: "0.34.0",
   }));
@@ -1295,11 +1845,12 @@ test("round-table preflight rejects pi-subagents older than 0.34", async () => {
     piSubagents: { ok: true, configured: true, version: "0.33.1", path: "/tmp/pi-subagents", packageSource: "npm:pi-subagents" },
   };
 
-  const doctor = await runDoctor(root, { dependencyStatus });
+  const doctor = await runDoctor(root, { backend: "legacy", dependencyStatus });
   assert.equal(doctor.status, "warning");
   assert.ok(doctor.issues.some((issue) => issue.message.includes("older than the supported round-table runtime")));
   await assert.rejects(
     () => assertPersonaRuntimeReady(root, {
+      backend: "legacy",
       dependencyStatus,
       minimumPiSubagentsVersion: "0.34.0",
     }),
@@ -1354,7 +1905,7 @@ Manual prompt.
   assert.equal(result.issues.some((issue) => issue.message.includes("nested persona consults need project runtime override")), false);
 });
 
-test("doctor treats legacy tools subagent as metadata to migrate, not required provisioning", async () => {
+test("doctor leaves legacy tools metadata alone instead of demanding migration", async () => {
   const root = await createWorkspace();
 
   await writeText(path.join(root, ".pi/agents/manual.md"), `---
@@ -1369,6 +1920,7 @@ Manual prompt.
 `);
 
   const result = await runDoctor(root, {
+    backend: "legacy",
     dependencyStatus: {
       piSubagents: { ok: true, version: "0.35.0", path: "/tmp/pi-subagents" },
       piIntercom: { ok: true, version: "0.6.0", path: "/tmp/pi-intercom" },
@@ -1376,8 +1928,8 @@ Manual prompt.
   });
   const manualIssues = result.issues.filter((issue) => issue.file === ".pi/agents/manual.md");
 
-  assert.equal(result.status, "warning");
-  assert.ok(manualIssues.some((issue) => issue.message.includes("legacy field tools found")));
+  assert.equal(result.status, "pass");
+  assert.equal(manualIssues.some((issue) => issue.message.includes("legacy field tools found")), false);
   assert.equal(manualIssues.some((issue) => issue.message.includes("nested persona consults need project runtime override")), false);
 });
 
@@ -1891,7 +2443,7 @@ test("buildAgentLaunchRequest creates an active-session persona request", async 
   assert.doesNotMatch(launch.systemPrompt, /Resolved skill files:/);
   assert.match(launch.systemPrompt, /## Active Pi Persona\n\nYou are the active Pi Persona `brand`/);
   assert.match(launch.systemPrompt, /Answer the user's current request directly as this persona/);
-  assert.match(launch.systemPrompt, /Do not start a pi-subagents child run to answer a direct persona command/);
+  assert.match(launch.systemPrompt, /Do not start a child run to answer a direct persona command/);
   assert.match(launch.systemPrompt, /Tool: persona_consult/);
   assert.match(launch.systemPrompt, /Known personas:/);
   assert.match(launch.systemPrompt, /guideline - specialist: Guideline reviewer\./);
@@ -2293,6 +2845,78 @@ test("selected specialists build two roundtable rounds and primary synthesis", a
   }
 });
 
+test("legacy bridge params support current pi-subagents without breaking 0.34 chains", async () => {
+  const root = await createWorkspace();
+  const consult = await resolveConsultLaunchRequest(root, {
+    requester: "brand",
+    consultant: "guideline",
+    question: "Review this.",
+    summary: "Compatibility check.",
+  });
+  assert.equal(consult.subagentParams.async, false);
+  assert.equal(Object.hasOwn(consult.subagentParams, "clarify"), false);
+
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+    selections: [{ name: "guideline", reason: "Policy review." }],
+  });
+  assert.equal(buildLegacyRoundtableParams(roundtable, "0.34.0"), roundtable.subagentParams);
+  const current = buildLegacyRoundtableParams(roundtable, "0.67.0");
+  assert.equal(current.async, false);
+  assert.equal(current.context, "fresh");
+  assert.equal(Object.hasOwn(current, "clarify"), false);
+  assert.equal(Object.hasOwn(current, "chain"), false);
+  assert.match(current.workflowScript, /runs\.all/);
+  assert.match(current.workflowScript, /runs\.run\("synthesis"/);
+  assert.match(current.workflowScript, /roundOneText/);
+  assert.match(current.workflowScript, /roundTwoText/);
+});
+
+test("native roundtable runs two parallel phases then synthesis and stops on phase failure", async () => {
+  const root = await createWorkspace();
+  const roundtable = await resolveRoundtableLaunchRequest(root, {
+    query: "Brand guideline question.",
+    selections: [
+      { name: "brand", reason: "Brand position." },
+      { name: "guideline", reason: "Guideline evidence." },
+    ],
+  });
+  const calls = [];
+  const result = await runNativeRoundtable(roundtable, async ({ scope, task, index }) => {
+    calls.push({ agent: scope.agent.name, task, index });
+    return { text: `${scope.agent.name} answer`, usage: { totalTokens: 1 } };
+  });
+
+  assert.deepEqual(calls.map((call) => call.index), [0, 1, 2, 3, 4]);
+  assert.match(calls[2].task, /### brand\n\nbrand answer/);
+  assert.match(calls[2].task, /### guideline\n\nguideline answer/);
+  assert.match(calls[4].task, /### brand\n\nbrand answer/);
+  assert.equal(result.text, "generalist answer");
+
+  const failedCalls = [];
+  await assert.rejects(
+    () => runNativeRoundtable(roundtable, async ({ scope, index }) => {
+      failedCalls.push(index);
+      if (scope.agent.name === "brand") throw new Error("brand failed");
+      return { text: "ok" };
+    }),
+    /stopped during Round 1/,
+  );
+  assert.deepEqual(failedCalls.sort(), [0, 1]);
+
+  const controller = new AbortController();
+  controller.abort();
+  const abortedCalls = [];
+  await assert.rejects(
+    () => runNativeRoundtable(roundtable, async (step) => {
+      abortedCalls.push(step);
+      return { text: "unexpected" };
+    }, { signal: controller.signal }),
+    /was cancelled/,
+  );
+  assert.deepEqual(abortedCalls, []);
+});
+
 test("roundtable selection refuses duplicate project agent names", async () => {
   const root = await createWorkspace();
 
@@ -2505,6 +3129,7 @@ test("roundtable failure output reports only current phase and agent status", as
   assert.match(text, /did not complete during Round 1/);
   assert.match(text, /Completed agents: brand/);
   assert.match(text, /Failed agents: guideline/);
+  assert.match(text, /Run \/persona-roundtable again to retry/);
   assert.doesNotMatch(text, /private|\/tmp|run-id|artifact/);
 });
 

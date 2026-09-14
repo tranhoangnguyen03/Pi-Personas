@@ -1,12 +1,12 @@
 # Pi Persona Blueprint
 
-Pi Persona is a generic persona-agent extension for Pi Coding Agent. It uses
-Pi's active chat session for direct persona answers and uses `pi-subagents`
-only for peer consults, round-tables, and child-session support.
+Pi Persona is a generic persona-agent extension for Pi Coding Agent 0.85.1. It
+uses Pi's active chat session for direct persona answers and a selectable child
+backend only for peer consults and round-tables.
 
 The extension adds a thin semantic layer over Pi. It does not replace Pi's
 session model, tool registry, permissions, plugin conventions, skill loading,
-filesystem behavior, or subagent runtime.
+filesystem behavior, or model/tool runtime.
 
 ## Product Boundary
 
@@ -18,10 +18,11 @@ Pi owns:
 - Skill and plugin loading.
 - Model, terminal, editor, and workspace integration.
 
-`pi-subagents` owns child Pi sessions, project-level subagent discovery, child
-execution, fresh or forked launch context, `reads`, native skills, foreground
-and background execution, native supervisor and result channels, status,
-resume, interrupt, and child safety.
+The native backend owns only one-shot child supervision: it starts a dedicated
+Node process, creates one controlled Pi SDK session, forwards progress and
+usage, cancels and disposes it, and returns one answer. Pi still owns the agent
+loop, model providers, authentication, built-in tools, skills, and session
+format. The legacy backend delegates child lifecycle to `pi-subagents`.
 
 Pi Persona owns:
 
@@ -33,21 +34,23 @@ Pi Persona owns:
 - Consult and round-table semantics.
 - Validation and setup feedback.
 - Conversational authoring of project persona files.
+- Fixed consult and round-table orchestration.
+- Backend selection and normalized child progress/results.
 
-Pi Persona must not create a parallel subagent system, permission system,
-message bus, session store, or tool runtime.
+Pi Persona must not grow a public subagent tool, general workflow language,
+permission system, message bus, persistent child-session store, background job
+platform, or model/tool runtime.
 
 ## Core Model
 
 An agent is a file. A resolver assembles role-aware instructions from that file.
 Direct persona commands inject those instructions into the active Pi session.
 Consult and round-table workflows reuse the same resolver, then launch child
-sessions through `pi-subagents` only when peer execution is needed.
+sessions through the selected backend only when peer execution is needed.
 
 The four main parts are:
 
-- `.pi/agents/**/*.md` project agent files, compatible with `pi-subagents`
-  discovery and extended with Pi Persona metadata.
+- `.pi/agents/**/*.md` project agent files with Pi Persona metadata.
 - `.pi/agents/_baseline.md`, merged into every resolved persona.
 - Resolver logic that combines baseline, selected persona, docs, skills, and
   known persona roster.
@@ -68,26 +71,49 @@ Pi Persona is an awareness layer, not a security boundary.
 - The generalist receives shared foundations and the persona roster, but not
   specialist docs unless the user promotes those docs to shared context.
 - Persona prompts describe intended context and routing behavior.
-- Pi, `pi-subagents`, and the host filesystem still own actual access.
+- Pi and the host filesystem still own actual access. Native children receive
+  a read-only built-in tool default, unless the persona declares other Pi built-ins; this is not a filesystem sandbox.
 - Pi Persona rejects declared paths and writes that escape the physical
   workspace, including escapes through symlinks.
 
 Friction should be added only for concrete failure modes. By default, inform,
 nudge, validate, and keep the user moving.
 
-## Runtime Dependencies
+## Child Backends
 
-Consult and round-table workflows require this Pi package:
+The `legacy` backend requires this Pi package:
 
 ```sh
 pi install npm:pi-subagents
 ```
 
 It must be installed and configured through Pi, not only present as a nested
-npm dependency. Direct persona mode can still work when the child runtime is
-missing. `/persona doctor`, `persona_consult`, and
-`/persona-roundtable` perform a runtime preflight and report install or
-configuration guidance before attempting bridge execution.
+npm dependency. The `native` backend requires no extra Pi package. Either
+backend can be selected explicitly by `.pi/persona.json` with
+`{ "backend": "native" | "legacy" }` or the `PI_PERSONA_BACKEND` environment
+override; either wins over auto-detection, and an invalid value is a startup
+error.
+
+With no explicit preference, Pi Persona defaults to `legacy` when
+`pi-subagents` is installed (the same existence check `detectDependencies`
+performs for doctor) and to `native` otherwise. This default only looks at
+whether the package is installed, not whether it is also configured as a
+loaded Pi package or new enough for round-tables — an installed-but-broken
+`pi-subagents` still resolves the default to `legacy`, and doctor/preflight
+reports the configuration or version problem rather than silently retrying as
+native. `/persona doctor` reports the effective backend and applies dependency
+checks only to legacy.
+
+Backend selection is frozen before work starts. There is no automatic retry or
+fallback after launch because a repeated child might duplicate side effects.
+Native launch resolves each selected persona's skills, built-in tools,
+model, authentication, and fork snapshot before the first round-table child
+starts. Authentication is then refreshed for each launch. Native is not an OS
+sandbox: child processes inherit the parent environment and filesystem access.
+Static doctor checks resolved child tools; loaded skills, models, providers,
+and authentication are checked against live Pi state at launch. Wildcard Pi
+peer metadata follows Pi packaging guidance. Pi 0.85.1 is the tested baseline;
+other host versions are not rejected merely because their version differs.
 
 ## Project Layout
 
@@ -95,6 +121,7 @@ User projects are built around this shape:
 
 ```text
 .pi/
+  persona.json          # optional: { "backend": "native" }
   agents/
     _baseline.md
     generalist.md
@@ -113,9 +140,8 @@ docs/
 Files prefixed with `_`, such as `_baseline.md`, are Pi Persona control files,
 not launchable personas.
 
-Runtime support roles copied from `pi-subagents` should be local project files
-with provenance metadata. Prefer copied files over symlinks for repo
-portability.
+Legacy runtime support roles remain ordinary local project files. The native
+backend does not discover or require runtime support personas.
 
 ## Agent File Format
 
@@ -213,10 +239,12 @@ selected roster gathers independent positions and revises after peer reveal,
 then the primary generalist synthesizes the answer. Selection failure is
 explicit and never falls back to a lexical heuristic.
 
-The in-process round-table bridge returns the chain result directly to Pi
-Persona. The user sees live native progress and one moderator synthesis, never
-the child runtime's grouped receipt, artifact paths, session paths, or a
-receipt-triggered second verdict.
+Legacy sends one request through the existing bridge: a chain payload for
+`pi-subagents` 0.34.0-0.40.x and a foreground `workflowScript` for 0.41.0 or
+newer. Native runs the same fixed workflow in Pi Persona: parallel Round 1, parallel Round 2 with
+ordered Round 1 answers, then one moderator session. A phase failure cancels
+unfinished siblings and prevents synthesis. Both paths show normalized progress
+and return one moderator synthesis without raw runtime paths or receipts.
 
 The round-table tool makes its process inspectable without streaming specialist
 opinions: it shows the delegated query, context policy, selected roster and
@@ -236,13 +264,13 @@ primary generalist, the bootstrap command returns setup guidance to run
 
 The active persona can use `persona_consult` when peer expertise is needed.
 That tool is the semantic consult boundary: it resolves the consultant, runs
-the child through `pi-subagents`, extracts the consultant answer, and returns
-compact provenance for synthesis. The requester must match the active persona,
-and a persona cannot consult itself.
+one child through the selected backend, and returns compact provenance for
+synthesis. The requester must match the active persona, and a persona cannot
+consult itself.
 
 Raw `subagent` guidance should not appear in direct persona prompts.
-`subagent list` lists global Pi subagents: builtins, user package agents, and
-project `.pi/agents` files. It is not the Pi Persona consultant roster.
+`subagent list` lists global Pi subagents when another package provides that
+command. It is not the Pi Persona consultant roster and native never calls it.
 `persona_consult` only accepts project Pi Persona agents discovered from the
 active workspace.
 
@@ -251,6 +279,9 @@ active workspace.
 - Pi Persona is a Pi extension, not a separate agent platform.
 - Direct persona answers happen in the active chat.
 - Subagents are for consult and round-table child work.
+- Native children are one-shot, foreground leaf sessions with a read-only default; personas may declare other Pi built-in tools.
+- Persistent conversations, background jobs, and child
+  extensions require a new concrete product decision rather than another flag.
 - The resolver is the only place that assembles persona awareness.
 - The active persona state is explicit and clearable.
 - Exactly one generalist should be `primary: true`.

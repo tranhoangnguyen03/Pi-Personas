@@ -62,7 +62,7 @@ function buildActivePersonaSystemPrompt(scope) {
     `Skills: ${scope.skills.length ? scope.skills.join(", ") : "none"}`,
     "",
     "Answer the user's current request directly as this persona, using the active Pi chat session.",
-    "Do not start a pi-subagents child run to answer a direct persona command.",
+    "Do not start a child run to answer a direct persona command.",
     "Stay in this persona until the user switches personas or runs /persona clear.",
   ].join("\n"));
 
@@ -75,8 +75,8 @@ function buildActivePersonaSystemPrompt(scope) {
     "Known personas:",
     ...formatRosterLines(scope.agentRoster),
     "Use only the known personas above as Pi Persona consultants.",
-    "Do not use raw `subagent list` to discover Pi Persona consultants; that list is global Pi runtime discovery.",
-    "Raw `subagent` launches are global Pi runtime behavior and bypass Pi Persona consult semantics, active persona state, and provenance.",
+    "Do not use raw `subagent list` to discover Pi Persona consultants; it belongs to separately installed subagent packages.",
+    "Raw `subagent` launches bypass Pi Persona consult semantics, active persona state, backend policy, and provenance.",
     "Default consult context: fresh",
     "Use context: fork only when the request genuinely requires full conversation context.",
     "You, the requesting agent, must write the consult summary before calling the consultant.",

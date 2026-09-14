@@ -34,16 +34,28 @@ export {
 } from "./init-manifest.js";
 export { sendPersonaOutput } from "./pi-output.js";
 export { createConsultProgressTracker, createRoundtableProgressTracker } from "./progress.js";
+export { cancelPersonaChildren, runPersonaChild } from "./child-runner.js";
 export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
 export {
+  buildLegacyRoundtableParams,
   extractRoundtableAnswer,
   formatRoundtableBridgeFailure,
   formatRoundtableBridgeResult,
   formatRoundtableRosterPreview,
+  runNativeRoundtable,
   resolveRoundtableLaunchRequest,
   resolveRoundtableSelectionRequest,
 } from "./roundtable.js";
-export { buildScopedSubagentParams, buildScopedSubagentStep } from "./runtime.js";
+export {
+  buildScopedSubagentParams,
+  buildScopedSubagentStep,
+  NATIVE_BUILTIN_TOOLS,
+  NATIVE_CHILD_TOOLS,
+  PERSONA_BACKENDS,
+  resolveNativeChildTools,
+  resolvePersonaBackend,
+  snapshotForkBranch,
+} from "./runtime.js";
 export {
   createAgentScaffold,
   createPersonaProjectScaffold,

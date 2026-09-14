@@ -50,6 +50,8 @@ export async function resolveConsultLaunchRequest(root, input) {
     tools: consultantScope.tools,
     consults: consultantScope.consults,
     tags: consultantScope.tags,
+    scope: consultantScope,
+    task,
     subagentParams,
   };
 }

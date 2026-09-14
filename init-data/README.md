@@ -22,6 +22,9 @@ is not part of the interview.
 When the draft is ready, the assistant previews the plan, asks for explicit
 approval, applies it, builds declared docs indexes, runs doctor verification,
 lists the available personas, and activates the primary generalist.
+If doctor finds errors after files are applied, onboarding reports **Applied —
+Needs Attention** and leaves the files in place for correction; it does not
+claim the apply was rolled back.
 
 The command is safe to rerun:
 
@@ -72,7 +75,7 @@ If you use assisted setup, the assistant edits these fields for you:
 
 - `project.name`: short, stable human-readable setup name.
 - `baseline.docs`: shared docs or docs directories.
-- `baseline.skills`: native `pi-subagents` skill names.
+- `baseline.skills`: Pi skill names available in the parent session.
 - `baseline.prompt`: shared operating instructions.
 - `docs.files`: workspace paths and starter file contents.
 - `agents`: launchable generalists and specialists.
@@ -84,8 +87,16 @@ Each agent needs:
 - `primary: true`: exactly one generalist must have this.
 - `description`: concise routing description.
 - `docs`: that persona's docs or docs directories.
-- `skills`: native `pi-subagents` skill names.
+- `skills`: Pi skill names available in the parent session.
 - `prompt`: persona-specific operating instructions.
+
+When the native backend is selected (explicitly, or by default when
+`pi-subagents` is not installed), baseline and agent `tools` combine into one
+allowlist. Omit `tools` for the read-only default (`read`, `grep`, `find`,
+`ls`), or name any Pi built-in tools the persona needs. Loaded skills,
+model/auth availability, and tool names are checked when used. Native children
+inherit the parent environment and filesystem permissions and are not an OS
+sandbox.
 
 ## Editing Rules
 

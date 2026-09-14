@@ -1,13 +1,18 @@
 import {
+  getAgentDir,
   getMarkdownTheme,
+  getPackageDir,
   keyHint,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Type } from "typebox";
 
 import {
   assertPersonaRuntimeReady,
+  cancelPersonaChildren,
   createConsultProgressTracker,
   createRoundtableProgressTracker,
   createAgentScaffold,
@@ -15,6 +20,7 @@ import {
   createPersonaInitDraft,
   createPersonaProjectScaffold,
   applyPersonaInitFromManifest,
+  buildLegacyRoundtableParams,
   discoverPersonaProject,
   extractConsultAnswer,
   extractRoundtableAnswer,
@@ -39,9 +45,14 @@ import {
   resolveConsultLaunchRequest,
   resolveRoundtableLaunchRequest,
   resolveRoundtableSelectionRequest,
+  resolveNativeChildTools,
+  resolvePersonaBackend,
+  runNativeRoundtable,
+  runPersonaChild,
   runDoctor,
   sendPersonaOutput,
   runSubagentBridgeRequest,
+  snapshotForkBranch,
   statusPersonaInitFromManifest,
 } from "../src/persona/index.js";
 
@@ -55,6 +66,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
 
   let activePersonaName: string | undefined;
   let pendingRoundtable: { cwd: string; query: string; moderator: string } | undefined;
+  let availableSkills: Array<{ name: string; filePath: string }> = [];
   const registeredPersonaCommands = new Set<string>();
 
   const updateActivePersonaStatus = (ctx: any) => {
@@ -85,7 +97,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "persona_consult",
     label: "pi-persona",
-    description: "Ask a known Pi Persona peer for a focused consult. The tool runs the child-safe pi-subagents request internally and returns the result.",
+    description: "Ask a known Pi Persona peer for a focused consult through the configured child backend and return the result.",
     promptSnippet: "Use persona_consult only when the active Pi Persona needs another known persona's expertise. Provide a narrow requester-written summary and synthesize the returned consultant answer.",
     parameters: Type.Object({
       requester: Type.String({ description: "Active Pi Persona requester agent name" }),
@@ -117,13 +129,13 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
       return new Text(text, 0, 0);
     },
-    renderResult(result, { expanded, isPartial }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context = {} as any) {
       const output = firstToolResultText(result);
       if (isPartial) {
         return new Text(theme.fg("toolOutput", stripConsultProgressHeading(output)), 0, 0);
       }
 
-      const failed = result.isError === true;
+      const failed = context.isError;
       const status = failed
         ? theme.fg("error", "✗ Consultation failed")
         : theme.fg("success", "✓ Consultation complete");
@@ -139,9 +151,10 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
       return container;
     },
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       let progress: ReturnType<typeof createConsultProgressReporter> | undefined;
       try {
+        assertNotAborted(signal, "consultation");
         restoreActivePersona(ctx);
         if (!activePersonaName) {
           throw new Error("persona_consult requires an active persona; run /persona use <name> first");
@@ -150,33 +163,35 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           throw new Error(`persona_consult requester must match active persona '${activePersonaName}'`);
         }
         const consult = await resolveConsultLaunchRequest(ctx.cwd, params);
-        await assertPersonaRuntimeReady(ctx.cwd);
+        const backend = await resolvePersonaBackend(ctx.cwd);
+        await assertPersonaRuntimeReady(ctx.cwd, { backend });
         progress = createConsultProgressReporter(onUpdate, consult.consultant.name);
-        const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams, {
+        if (backend === "legacy") {
+          const response = await runSubagentBridgeRequest(pi, ctx, consult.subagentParams, {
+            signal,
+            onUpdate(update: unknown) {
+              progress?.update(update);
+            },
+          });
+          const answer = await extractConsultAnswer(response);
+          if (response.isError === true || answer.source === "missing") {
+            throw new Error(formatConsultBridgeResult(consult, answer.text, true));
+          }
+          return {
+            content: [{ type: "text", text: formatConsultBridgeResult(consult, answer.text) }],
+            details: { backend, requester: consult.requester.name, consultant: consult.consultant.name, context: consult.context, answer },
+          };
+        }
+
+        const request = await createNativeRequest(consult.scope, consult.task, consult.context, toolCallId, ctx, availableSkills, undefined, signal);
+        const result = await runPersonaChild(request, {
           signal,
-          onUpdate(update: unknown) {
-            progress?.update(update);
-          },
+          onUpdate(update: unknown) { progress?.update(update); },
         });
-        const answer = await extractConsultAnswer(response);
-        const text = formatConsultBridgeResult(consult, answer.text, response.isError === true || answer.source === "missing");
         return {
-          content: [{ type: "text", text }],
-          isError: response.isError === true || answer.source === "missing",
-          details: {
-            requester: consult.requester.name,
-            consultant: consult.consultant.name,
-            context: consult.context,
-            subagentParams: consult.subagentParams,
-            answer,
-            result: response.result,
-          },
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-          isError: true,
-          details: { error: true },
+          content: [{ type: "text", text: formatConsultBridgeResult(consult, result.text) }],
+          details: { backend, requester: consult.requester.name, consultant: consult.consultant.name, context: consult.context, model: result.model },
+          usage: result.usage,
         };
       } finally {
         progress?.stop();
@@ -226,17 +241,17 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
       return new Text(text, 0, 0);
     },
-    renderResult(result, { expanded, isPartial }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context = {} as any) {
       const output = firstToolResultText(result);
       if (isPartial) {
         return new Text(theme.fg("toolOutput", stripRoundtableProgressHeading(output)), 0, 0);
       }
 
-      const failed = result.isError === true;
+      const failed = context.isError;
       const status = failed
         ? theme.fg("error", "✗ Round-table failed")
         : theme.fg("success", "✓ Round-table complete");
-      const process = formatRoundtableProcessLine(result.details?.process);
+      const process = formatRoundtableProcessLine((result.details as { process?: any } | undefined)?.process);
       if (!expanded) {
         return new Text(`${status}${process ? `\n${theme.fg("dim", process)}` : ""}`, 0, 0);
       }
@@ -249,9 +264,10 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
       }
       return container;
     },
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       let progress: ReturnType<typeof createRoundtableProgressReporter> | undefined;
       try {
+        assertNotAborted(signal, "round-table");
         restoreActivePersona(ctx);
         if (!pendingRoundtable || pendingRoundtable.cwd !== ctx.cwd) {
           throw new Error("persona_roundtable requires a pending /persona-roundtable request");
@@ -263,56 +279,49 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
         if (activePersonaName !== roundtable.generalist.name || pendingRoundtable.moderator !== roundtable.generalist.name) {
           throw new Error(`persona_roundtable requires active primary generalist '${roundtable.generalist.name}'`);
         }
-        await assertPersonaRuntimeReady(ctx.cwd, {
+        const backend = await resolvePersonaBackend(ctx.cwd);
+        const runtime = await assertPersonaRuntimeReady(ctx.cwd, {
+          backend,
           minimumPiSubagentsVersion: PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
         });
         pendingRoundtable = undefined;
         progress = createRoundtableProgressReporter(onUpdate, roundtable);
-        const response = await runSubagentBridgeRequest(pi, ctx, roundtable.subagentParams, {
-          signal,
-          idleTimeoutMs: false,
-          onUpdate(update: unknown) {
-            progress?.update(update);
-          },
-        });
-        const process = createRoundtableProcessDetails(roundtable, response, progress.summary());
-        if (response.isError === true) {
+        if (backend === "legacy") {
+          const response = await runSubagentBridgeRequest(pi, ctx, buildLegacyRoundtableParams(roundtable, runtime.piSubagents?.version), {
+            signal,
+            idleTimeoutMs: false,
+            onUpdate(update: unknown) { progress?.update(update); },
+          });
+          const process = createRoundtableProcessDetails(roundtable, response, progress.summary());
+          if (response.isError === true) throw new Error(formatRoundtableBridgeFailure(roundtable, response));
+          const answer = await extractRoundtableAnswer(response, roundtable.generalist.name);
+          if (answer.source === "missing") throw new Error(formatRoundtableBridgeFailure(roundtable, response));
           return {
-            content: [{ type: "text", text: formatRoundtableBridgeFailure(roundtable, response) }],
-            isError: true,
-            details: {
-              moderator: roundtable.generalist.name,
-              roster: roundtable.roster.map((agent: any) => agent.name),
-              context: roundtable.context,
-              process,
-              result: response.result,
-            },
+            content: [{ type: "text", text: formatRoundtableBridgeResult(roundtable, answer.text) }],
+            details: { backend, moderator: roundtable.generalist.name, roster: roundtable.roster.map((agent: any) => agent.name), context: roundtable.context, process, answer },
           };
         }
-        const answer = await extractRoundtableAnswer(response, roundtable.generalist.name);
-        const isError = answer.source === "missing";
+
+        const branch = roundtable.context === "fork" ? snapshotForkBranch(ctx.sessionManager, toolCallId) : [];
+        for (const scope of roundtable.scopes.values()) {
+          assertNotAborted(signal, "round-table");
+          await createNativeRequest(scope, "preflight", roundtable.context, toolCallId, ctx, availableSkills, branch, signal);
+        }
+        const native = await runNativeRoundtable(roundtable, async ({ scope, task, index, signal: childSignal, onUpdate: childUpdate }: any) => {
+          const request = await createNativeRequest(scope, task, roundtable.context, toolCallId, ctx, availableSkills, branch, childSignal);
+          return runPersonaChild(request, { index, signal: childSignal, idleTimeoutMs: false, onUpdate: childUpdate });
+        }, { signal, onUpdate: (update: unknown) => progress?.update(update) });
+        const process = createNativeRoundtableProcessDetails(roundtable, native, progress.summary());
         return {
-          content: [{
-            type: "text",
-            text: isError
-              ? formatRoundtableBridgeFailure(roundtable, response)
-              : formatRoundtableBridgeResult(roundtable, answer.text),
-          }],
-          isError: isError || undefined,
+          content: [{ type: "text", text: formatRoundtableBridgeResult(roundtable, native.text) }],
           details: {
+            backend,
             moderator: roundtable.generalist.name,
             roster: roundtable.roster.map((agent: any) => agent.name),
             context: roundtable.context,
             process,
-            answer,
-            result: response.result,
           },
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-          isError: true,
-          details: { error: true },
+          usage: combineUsage(native.steps.map((step: any) => step.usage)),
         };
       } finally {
         progress?.stop();
@@ -402,7 +411,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
             content: [{
               type: "text",
               text: [
-                formatPersonaInitManifestReport(result, { doctorIncluded: true }),
+                formatPersonaInitManifestReport(result, { doctorIncluded: true, needsAttention: doctor.status === "error" }),
                 formatDoctorReport(doctor),
                 formatPersonaList(project),
                 doctor.status === "error"
@@ -410,7 +419,6 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
                   : "What would you like help with first?",
               ].join("\n\n"),
             }],
-            isError: doctor.status === "error" || undefined,
             details: { ...result, index, status, doctor },
           };
         }
@@ -422,11 +430,7 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
           details: result,
         };
       } catch (error) {
-        return {
-          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-          isError: true,
-          details: { error: true },
-        };
+        throw error instanceof Error ? error : new Error(String(error));
       }
     },
   });
@@ -441,7 +445,14 @@ export default function registerPiPersona(pi: ExtensionAPI): void {
     }
   });
 
+  pi.on("session_shutdown", () => {
+    cancelPersonaChildren();
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
+    availableSkills = (event.systemPromptOptions?.skills ?? [])
+      .filter((skill: any) => typeof skill?.name === "string" && typeof skill?.filePath === "string")
+      .map((skill: any) => ({ name: skill.name, filePath: skill.filePath }));
     restoreActivePersona(ctx);
     if (!activePersonaName) {
       updateActivePersonaStatus(ctx);
@@ -747,6 +758,107 @@ function createRoundtableProcessDetails(roundtable: any, response: any, summary:
     failedSteps: results.filter((entry: any) => entry?.exitCode > 0 || entry?.status === "failed").length,
     ...summary,
   };
+}
+
+function createNativeRoundtableProcessDetails(roundtable: any, result: any, summary: any) {
+  return {
+    specialists: roundtable.roster.length,
+    rounds: 2,
+    expectedSteps: roundtable.roster.length * 2 + 1,
+    completedSteps: result.steps.length,
+    failedSteps: 0,
+    ...summary,
+  };
+}
+
+async function createNativeRequest(
+  scope: any,
+  task: string,
+  context: string,
+  toolCallId: string,
+  ctx: any,
+  loadedSkills: Array<{ name: string; filePath: string }>,
+  frozenBranch?: any[],
+  signal?: AbortSignal,
+) {
+  assertNotAborted(signal, "child launch");
+  let requestedTools;
+  try {
+    requestedTools = resolveNativeChildTools(scope.tools);
+  } catch (error) {
+    throw new Error(`${scope.agent.name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const skillPaths = scope.skills.map((name: string) => {
+    const matches = loadedSkills.filter((skill) => skill.name === name);
+    if (matches.length !== 1) {
+      throw new Error(`Native backend requires exactly one loaded Pi skill named '${name}' for ${scope.agent.name}; found ${matches.length}.`);
+    }
+    return matches[0].filePath;
+  });
+  const { model, thinkingLevel } = resolveNativeModel(scope.agent.model, ctx);
+  const dynamicProviders = ctx.modelRegistry.getRegisteredProviderIds?.() ?? [];
+  if (dynamicProviders.includes(model.provider)) {
+    throw new Error(`Native backend cannot use extension-registered provider '${model.provider}' because child extensions are disabled.`);
+  }
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok) throw new Error(auth.error);
+  assertNotAborted(signal, "child launch");
+
+  return {
+    cwd: ctx.cwd,
+    agentDir: getAgentDir(),
+    sdkEntry: pathToFileURL(join(getPackageDir(), "dist/index.js")).href,
+    authStorageEntry: pathToFileURL(join(getPackageDir(), "dist/core/auth-storage.js")).href,
+    projectTrusted: ctx.isProjectTrusted(),
+    personaName: scope.agent.name,
+    systemPrompt: `${scope.prompt}\n\n## Native Child Boundary\n\nThis is a one-shot leaf session. Use only the tools declared for this persona and return the requested answer directly. Do not attempt delegation.`,
+    task,
+    model: { provider: model.provider, id: model.id },
+    thinkingLevel,
+    auth,
+    skillNames: scope.skills,
+    skillPaths,
+    tools: requestedTools,
+    context,
+    branch: context === "fork" ? frozenBranch ?? snapshotForkBranch(ctx.sessionManager, toolCallId) : [],
+  };
+}
+
+function assertNotAborted(signal: AbortSignal | undefined, operation: string) {
+  if (signal?.aborted) throw new Error(`Native Pi Persona ${operation} was cancelled.`);
+}
+
+function resolveNativeModel(value: unknown, ctx: any) {
+  if (typeof value !== "string" || !value.trim()) {
+    if (!ctx.model) throw new Error("Native backend requires an active Pi model.");
+    return { model: ctx.model, thinkingLevel: ctx.thinkingLevel };
+  }
+  const thinkingMatch = value.trim().match(/:(off|minimal|low|medium|high|xhigh|max)$/);
+  const spec = thinkingMatch ? value.trim().slice(0, -thinkingMatch[0].length) : value.trim();
+  const separator = spec.indexOf("/");
+  const provider = separator < 0 ? undefined : spec.slice(0, separator);
+  const id = separator < 0 ? spec : spec.slice(separator + 1);
+  const matches = ctx.modelRegistry.getAll().filter((model: any) => model.id === id && (!provider || model.provider === provider));
+  if (matches.length !== 1) throw new Error(`Native backend could not resolve persona model '${value}' uniquely; found ${matches.length}.`);
+  return { model: matches[0], thinkingLevel: thinkingMatch?.[1] ?? ctx.thinkingLevel };
+}
+
+function combineUsage(usages: any[]) {
+  const total: any = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  for (const usage of usages) {
+    if (!usage) continue;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) total[key] += Number(usage[key]) || 0;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"]) total.cost[key] += Number(usage.cost?.[key]) || 0;
+  }
+  return total;
 }
 
 function formatRoundtableProcessLine(process: any): string {

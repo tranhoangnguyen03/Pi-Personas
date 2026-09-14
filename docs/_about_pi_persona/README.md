@@ -35,5 +35,8 @@ documentation folders in this repository.
 - When behavior changes, update `blueprint.md` or `design.md` in the same
   change as the code and tests.
 - Keep install and compatibility claims aligned with the tested public package metadata.
+- Keep user-visible backend selection, native limitations, privacy, progress,
+  cancellation, and failure semantics aligned across README, blueprint,
+  design, init-data guidance, and releasing checks.
 - Do not reintroduce historical phase logs or transcript dumps into this folder.
 - Prefer one consolidated design section over several stale narrow documents.

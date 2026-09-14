@@ -38,6 +38,7 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
     generalist,
     selections,
     roster,
+    scopes,
     subagentParams: {
       chain,
       task: `Advisory analysis only. Do not edit or modify files.\n\nQuery: ${query}`,
@@ -51,6 +52,77 @@ export async function resolveRoundtableLaunchRequest(root, input = {}) {
       },
     },
   };
+}
+
+export async function runNativeRoundtable(roundtable, runStep, options = {}) {
+  const roundOne = await runNativePhase("Round 1", roundtable.roster.map((agent, index) => ({
+    scope: roundtable.scopes.get(agent.name),
+    task: buildRoundOneTask(roundtable.scopes.get(agent.name), roundtable.query, roundtable.roster),
+    index,
+  })), runStep, options);
+  const roundOneText = formatNativeOutputs(roundOne);
+  const roundTwo = await runNativePhase("Round 2", roundtable.roster.map((agent, index) => ({
+    scope: roundtable.scopes.get(agent.name),
+    task: buildRoundTwoTask(roundtable.scopes.get(agent.name), roundtable.query, roundtable.roster, roundOneText),
+    index: roundtable.roster.length + index,
+  })), runStep, options);
+  const synthesis = await runNativePhase("moderator synthesis", [{
+    scope: roundtable.scopes.get(roundtable.generalist.name),
+    task: buildSynthesisTask(
+      roundtable.scopes.get(roundtable.generalist.name),
+      roundtable.query,
+      roundtable.roster,
+      formatNativeOutputs(roundTwo),
+    ),
+    index: roundtable.roster.length * 2,
+  }], runStep, options);
+  return { text: synthesis[0].text, steps: [...roundOne, ...roundTwo, ...synthesis] };
+}
+
+export function buildLegacyRoundtableParams(roundtable, piSubagentsVersion) {
+  if (!supportsWorkflowScript(piSubagentsVersion)) return roundtable.subagentParams;
+
+  const [roundOne, roundTwo, synthesis] = roundtable.subagentParams.chain;
+  const names = roundtable.roster.map((agent) => agent.name);
+  return {
+    workflowScript: [
+      `const roundOne = await runs.all([${roundOne.parallel.map((step, index) => workflowChild(`round-1-${index}`, step, roundtable.context)).join(",")}]);`,
+      `const roundOneText = roundOne.map((result, index) => "### " + ${JSON.stringify(names)}[index] + "\\n\\n" + (result.output ?? "")).join("\\n\\n");`,
+      `const roundTwo = await runs.all([${roundTwo.parallel.map((step, index) => workflowChild(`round-2-${index}`, step, roundtable.context, "roundOneText")).join(",")}]);`,
+      `const roundTwoText = roundTwo.map((result, index) => "### " + ${JSON.stringify(names)}[index] + "\\n\\n" + (result.output ?? "")).join("\\n\\n");`,
+      `return runs.run("synthesis", ${workflowChild(undefined, synthesis, roundtable.context, "roundTwoText")});`,
+    ].join("\n"),
+    async: false,
+    context: roundtable.context,
+  };
+}
+
+async function runNativePhase(phase, steps, runStep, options) {
+  if (options.signal?.aborted) throw new Error("Native Pi Persona round-table was cancelled.");
+  const controller = new AbortController();
+  let firstError;
+  const abort = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener?.("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
+  try {
+    const settled = await Promise.allSettled(steps.map(async (step) => {
+      try {
+        const result = await runStep({ ...step, signal: controller.signal, onUpdate: options.onUpdate });
+        options.onUpdate?.({ progress: [{ index: step.index, agent: step.scope.agent.name, status: "completed" }] });
+        return { ...result, agent: step.scope.agent.name, index: step.index };
+      } catch (error) {
+        firstError ??= error;
+        controller.abort(error);
+        options.onUpdate?.({ progress: [{ index: step.index, agent: step.scope.agent.name, status: "failed" }] });
+        throw error;
+      }
+    }));
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure) throw new Error(`Round-table stopped during ${phase}: ${firstError instanceof Error ? firstError.message : String(firstError)}`);
+    return settled.map((result) => result.value);
+  } finally {
+    options.signal?.removeEventListener?.("abort", abort);
+  }
 }
 
 export async function resolveRoundtableSelectionRequest(root, input = {}) {
@@ -127,7 +199,7 @@ export function formatRoundtableBridgeFailure(roundtable, response) {
     `Round-table did not complete during ${phase}; no moderator synthesis was produced.`,
     completed.length ? `Completed agents: ${[...new Set(completed)].join(", ")}.` : undefined,
     failed.length ? `Failed agents: ${[...new Set(failed)].join(", ")}.` : undefined,
-    "You can retry the round-table; Pi Persona will not reuse results from another run.",
+    "Run /persona-roundtable again to retry; Pi Persona will not reuse results from another run.",
   ].filter(Boolean).join("\n");
 }
 
@@ -211,7 +283,7 @@ function buildRoundOneTask(scope, query, roster) {
   ].join("\n"));
 }
 
-function buildRoundTwoTask(scope, query, roster) {
+function buildRoundTwoTask(scope, query, roster, previous = "{previous}") {
   return withDocs(scope, [
     "## Pi Persona Round-table",
     "",
@@ -222,7 +294,7 @@ function buildRoundTwoTask(scope, query, roster) {
     `Query: ${query}`,
     "",
     "Peer round-1 positions:",
-    "{previous}",
+    previous,
     "",
     "Revise, qualify, reinforce, or concede your position after reading the peer positions.",
     "This round-table step is a leaf task.",
@@ -231,7 +303,7 @@ function buildRoundTwoTask(scope, query, roster) {
   ].join("\n"));
 }
 
-function buildSynthesisTask(scope, query, roster) {
+function buildSynthesisTask(scope, query, roster, previous = "{previous}") {
   return withDocs(scope, [
     "## Pi Persona Round-table",
     "",
@@ -242,10 +314,30 @@ function buildSynthesisTask(scope, query, roster) {
     `Query: ${query}`,
     "",
     "Round-table outputs:",
-    "{previous}",
+    previous,
     "",
     "Synthesize where specialists converged, where tensions remain, the recommended next action, and any specialist failures with their impact.",
   ].join("\n"));
+}
+
+function formatNativeOutputs(results) {
+  return results.map((result) => `### ${result.agent}\n\n${result.text}`).join("\n\n");
+}
+
+function workflowChild(key, step, context, previous) {
+  const fields = { key, agent: step.agent, context };
+  for (const name of ["model", "reads", "skill", "acceptance"]) {
+    if (step[name] !== undefined) fields[name] = step[name];
+  }
+  const task = previous
+    ? step.task.split("{previous}").map((part) => JSON.stringify(part)).join(` + ${previous} + `)
+    : JSON.stringify(step.task);
+  return `{${Object.entries(fields).filter(([, value]) => value !== undefined).map(([name, value]) => `${JSON.stringify(name)}:${JSON.stringify(value)}`).join(",")},"task":${task}}`;
+}
+
+function supportsWorkflowScript(version) {
+  const match = /^(\d+)\.(\d+)/.exec(String(version ?? ""));
+  return Boolean(match && (Number(match[1]) > 0 || Number(match[2]) >= 41));
 }
 
 function withDocs(scope, task) {
