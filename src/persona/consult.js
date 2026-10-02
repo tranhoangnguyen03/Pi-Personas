@@ -1,7 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { discoverPersonaProject, findUniqueAgent } from "./agents.js";
 import { resolveAgentScope } from "./resolver.js";
-import { buildScopedSubagentParams, formatDocReadPreamble } from "./runtime.js";
+import { formatDocReadPreamble } from "./runtime.js";
 
 export function buildConsultEnvelope(input) {
   const requester = requireText(input.requester, "requester");
@@ -23,22 +22,24 @@ export function buildConsultEnvelope(input) {
   };
 }
 
-export async function resolveConsultLaunchRequest(root, input) {
-  const project = await discoverPersonaProject(root);
+// `options.project`/`options.packRoot`, when supplied by a bound pack
+// session, resolve requester/consultant from that retained snapshot instead
+// of rediscovering `root`'s `.pi/agents`; see resolveAgentScope.
+export async function resolveConsultLaunchRequest(root, input, options = {}) {
+  const project = options.project ?? await discoverPersonaProject(root);
   const requester = findAgent(project, input.requester, "requester");
   const consultant = findAgent(project, input.consultant, "consultant");
   if (requester.name === consultant.name) {
     throw new Error("consultant must be a different persona from requester");
   }
 
-  const consultantScope = await resolveAgentScope(root, consultant.name);
+  const consultantScope = await resolveAgentScope(root, consultant.name, { project, packRoot: options.packRoot });
   const envelope = buildConsultEnvelope({
     ...input,
     requester: requester.name,
     consultant: consultant.name,
   });
   const task = buildConsultTask(consultantScope, envelope);
-  const subagentParams = buildScopedSubagentParams(consultantScope, task, { context: envelope.consult.context });
 
   return {
     requester,
@@ -52,7 +53,6 @@ export async function resolveConsultLaunchRequest(root, input) {
     tags: consultantScope.tags,
     scope: consultantScope,
     task,
-    subagentParams,
   };
 }
 
@@ -77,33 +77,6 @@ export function formatConsultBridgeResult(consultRequest, answerText, isError = 
       summary: summarizeAnswer(text),
     }]),
   ].join("\n");
-}
-
-export async function extractConsultAnswer(response) {
-  const structured = firstChildText(response, "structuredOutput");
-  if (structured) return { text: structured, source: "structured" };
-
-  const final = firstChildText(response, "finalOutput") || firstChildText(response, "output");
-  if (final) return { text: final, source: "final" };
-
-  for (const artifactPath of artifactOutputPaths(response)) {
-    try {
-      const text = normalizeAnswerText(await readFile(artifactPath, "utf8"));
-      if (text !== "(no output)") {
-        return { text, source: "artifact", artifactPath };
-      }
-    } catch {
-      // Ignore missing/stale artifacts; the bridge text fallback below still gives context.
-    }
-  }
-
-  const bridge = bridgeResponseText(response);
-  if (bridge && !isIntercomReceiptText(bridge)) return { text: bridge, source: "bridge" };
-
-  return {
-    text: missingAnswerText(response),
-    source: "missing",
-  };
 }
 
 function buildConsultTask(scope, envelope) {
@@ -155,75 +128,6 @@ function optionalText(value) {
 
 function normalizeAnswerText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "(no output)";
-}
-
-function firstChildText(response, key) {
-  for (const result of childResults(response)) {
-    const value = result?.[key];
-    const text = stringifyAnswerValue(value);
-    if (text) return text;
-  }
-  return undefined;
-}
-
-function stringifyAnswerValue(value) {
-  if (typeof value === "string") return value.trim() || undefined;
-  if (value === undefined || value === null) return undefined;
-  return JSON.stringify(value, null, 2);
-}
-
-function childResults(response) {
-  const results = response?.result?.details?.results;
-  return Array.isArray(results) ? results : [];
-}
-
-function artifactOutputPaths(response) {
-  const paths = [];
-  for (const result of childResults(response)) {
-    const outputPath = result?.artifactPaths?.outputPath ?? result?.savedOutputPath;
-    if (typeof outputPath === "string" && outputPath) paths.push(outputPath);
-  }
-  const artifactPath = response?.result?.details?.artifactPath;
-  if (typeof artifactPath === "string" && artifactPath) paths.push(artifactPath);
-  const children = response?.result?.details?.children;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      if (typeof child?.artifactPath === "string" && child.artifactPath) paths.push(child.artifactPath);
-    }
-  }
-  return [...new Set(paths)];
-}
-
-function bridgeResponseText(response) {
-  if (response?.errorText) return response.errorText;
-  const content = response?.result?.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => part?.text)
-      .filter((text) => typeof text === "string" && text.length > 0)
-      .join("\n")
-      .trim();
-  }
-  return "";
-}
-
-function isIntercomReceiptText(text) {
-  const lines = text.trim().split(/\r?\n/).map((line) => line.trim());
-  return /^Delivered (?:single subagent result|parallel subagent results|chain subagent results) via intercom\.$/.test(lines[0] ?? "")
-    && lines.includes("Full grouped output was sent over intercom.");
-}
-
-function missingAnswerText(response) {
-  const metadata = [
-    response?.requestId ? `request: ${response.requestId}` : undefined,
-    response?.result?.details?.runId ? `run: ${response.result.details.runId}` : undefined,
-    ...artifactOutputPaths(response).map((artifactPath) => `artifact: ${artifactPath}`),
-  ].filter(Boolean);
-  return [
-    "Consult completed but no answer text was found.",
-    metadata.length ? metadata.join("\n") : "No run or artifact metadata was available.",
-  ].join("\n");
 }
 
 function summarizeAnswer(text) {

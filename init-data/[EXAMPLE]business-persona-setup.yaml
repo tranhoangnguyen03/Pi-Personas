@@ -1,0 +1,37 @@
+version: 1
+project:
+  name: business-persona-setup
+
+baseline:
+  docs:
+    - library/shared/
+  skills: []
+  prompt: |
+    Shared project context for every business persona.
+
+    Keep answers practical, concise, and grounded in the available library. Answer
+    directly when shared context is enough. Consult specialists when the request
+    clearly needs their perspective. Prefer fresh consult context by default and
+    use forked context only when full conversation history is deliberately needed.
+
+docs:
+  files:
+    library/shared/_index.md: |
+      # Shared Library Index
+
+      - operating-principles.md: shared working rules for every persona.
+      - business-context.md: facts, constraints, and open questions about the business.
+    library/shared/operating-principles.md: |
+      # Operating Principles
+
+      - Keep friction low.
+      - Make assumptions explicit.
+      - Prefer reversible, file-native setup.
+      - Ask for missing business facts only when they materially change the result.
+    library/shared/business-context.md: |
+      # Business Context
+
+      Add the user's business facts, current priorities, constraints, audience,
+      products, services, channels, and recurring decisions here.
+
+agents: []

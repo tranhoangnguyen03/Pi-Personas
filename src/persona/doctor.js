@@ -1,51 +1,82 @@
-import { copyFile, readFile, rename, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
   discoverPersonaProject,
-  formatPrimaryGeneralistError,
   getPrimaryGeneralistState,
   resolveWorkspacePath,
 } from "./agents.js";
-import {
-  detectDependencies,
-  isPiSubagentsPackage,
-  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
-  RUNTIME_PACKAGES,
-  runtimePackages,
-  versionAtLeast,
-} from "./dependencies.js";
 import { inspectDocPath } from "./doc-index.js";
+import { listGlobalPersonaPacks } from "./global-pack-store.js";
 import { findPersonaTemplatePlaceholders } from "./init-manifest.js";
+import { runPersonaPackAction } from "./pack-lifecycle.js";
+import { readGlobalDefaultPack } from "./pack-session.js";
 import { validatePersonaSchema } from "./schema.js";
-import { NATIVE_BUILTIN_TOOLS, resolvePersonaBackend } from "./runtime.js";
+import { assertNativeBackend, NATIVE_BUILTIN_TOOLS } from "./runtime.js";
 
-export { PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION };
-
+// options.team, when supplied by the extension boundary, is this session's
+// current global-team scope (see teamScopeState in extensions/pi-persona.ts):
+// { state: "bound", qualifiedName } or { state: "legacy" | "none" |
+// "missing-bound" | "migration-required" }. A bound global team does not
+// need this project's own foundation/baseline or installed project packs --
+// none of ctx.cwd's own agents are registered as commands while a team is
+// bound (see registerProjectCommands), so demanding a project foundation in
+// that state would be pure noise, not a real gap. options.storeRoot, when
+// supplied, additionally reports on the global persona pack store itself
+// (installed counts, pending drafts, default), independent of ctx.cwd.
 export async function runDoctor(root, options = {}) {
-  const backend = options.backend ?? await resolvePersonaBackend(root, options);
-  const repairs = backend === "legacy" && !options.dependencyStatus ? await repairRuntimePackageDuplicates(root) : [];
   const project = await discoverPersonaProject(root);
-  const dependencyStatus = options.dependencyStatus ?? (backend === "legacy" ? await detectDependencies(root) : { piSubagents: { required: false } });
   const issues = [];
+  const team = options.team;
+  const bound = team?.state === "bound";
+  // "legacy" (or no team info at all, i.e. a caller outside the global-team-
+  // aware extension boundary) is the only condition under which this
+  // project's own ctx.cwd foundation/project-local packs are actually load-
+  // bearing. "none", "missing-bound", and "migration-required" are every bit
+  // as team-model-aware as "bound" -- they just haven't successfully bound
+  // one yet -- so demanding a project foundation or flagging project-local
+  // pack drift in those states is a false positive: the fix is /persona
+  // team, never /persona onboard.
+  const needsLegacyFoundationCheck = !team || team.state === "legacy";
 
-  if (repairs.length > 0) {
+  await collectBackendIssues(root, options, issues);
+  collectParseIssues(project, issues);
+  if (!project.baseline && needsLegacyFoundationCheck) {
     issues.push({
-      severity: "warning",
-      message: "duplicate pi-subagents configuration was repaired; reload Pi before running consults or round-tables",
+      severity: "error",
+      message: "project foundation is missing; run /persona onboard",
     });
   }
-  if (backend === "legacy") collectDependencyIssues(dependencyStatus, issues);
-  collectParseIssues(project, issues);
   issues.push(...validatePersonaSchema(project));
   collectDuplicateNameIssues(project, issues);
-  collectGeneralistIssues(project, issues);
   collectAgentTemplatePlaceholderIssues(project, issues);
   await collectDocsIssues(project, issues);
   collectSkillsIssues(project, issues);
   collectLegacyMetadataIssues(project, issues);
-  if (backend === "native") collectNativeIssues(project, issues);
+  let packStatus;
+  try {
+    packStatus = await runPersonaPackAction(root, { action: "status" });
+    if (needsLegacyFoundationCheck) collectPackIssues(packStatus, issues);
+  } catch (error) {
+    issues.push({
+      severity: "error",
+      message: `persona pack state is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+  collectNativeIssues(project, issues);
+
+  let globalPackSummary;
+  if (options.storeRoot) {
+    try {
+      globalPackSummary = await summarizeGlobalPackStore(options.storeRoot, team);
+      issues.push(...globalPackSummary.issues);
+    } catch (error) {
+      issues.push({
+        severity: "error",
+        message: `persona pack store is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
 
   const status = issues.some((issue) => issue.severity === "error")
     ? "error"
@@ -55,39 +86,76 @@ export async function runDoctor(root, options = {}) {
 
   return {
     status,
-    backend,
+    backend: "native",
     root,
-    dependencies: dependencyStatus,
     project,
+    packStatus,
+    team,
+    globalPackSummary,
     issues,
-    repairs,
   };
 }
 
 export async function assertPersonaRuntimeReady(root, options = {}) {
-  const backend = options.backend ?? await resolvePersonaBackend(root, options);
-  if (backend === "native") {
-    return { backend };
-  }
-  const repairs = options.dependencyStatus ? [] : await repairRuntimePackageDuplicates(root);
-  if (repairs.length > 0) {
-    throw new Error("Pi Persona repaired duplicate pi-subagents configuration. Reload Pi, then retry.");
-  }
-  const dependencyStatus = options.dependencyStatus ?? await detectDependencies(root);
-  const problems = runtimeDependencyProblems(dependencyStatus, options.minimumPiSubagentsVersion);
-  if (problems.length === 0) return dependencyStatus;
+  await assertNativeBackend(root, options);
+  return { backend: "native" };
+}
 
-  throw new Error([
-    "Pi Persona consults and round-tables require runtime packages.",
-    "",
-    "Problems:",
-    ...problems.map((problem) => `- ${problem}`),
-    "",
-    "Install/configure with:",
-    `pi install ${RUNTIME_PACKAGES.piSubagents.source}`,
-    "",
-    "Then restart Pi and run /persona doctor.",
-  ].join("\n"));
+// Pure, storeRoot-scoped summary (no Pi API, matches global-pack-store.js's
+// and pack-session.js's own "explicit root" convention): installed/pending
+// counts and default are always reported when options.storeRoot is passed to
+// runDoctor; per-state team recovery guidance ("missing pack management
+// recovery") is added only when the caller also passes options.team.
+async function summarizeGlobalPackStore(storeRoot, team) {
+  const { official, custom } = await listGlobalPersonaPacks(storeRoot);
+  const defaultRecord = await readGlobalDefaultPack(storeRoot);
+  let drafts = [];
+  try {
+    const entries = await readdir(path.join(storeRoot, "drafts"), { withFileTypes: true });
+    drafts = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const issues = [];
+  for (const draft of drafts) {
+    issues.push({
+      severity: "warning",
+      message: `persona pack draft '${draft}' is unfinished; run /persona pack preview ${draft} and /persona pack apply ${draft}, or /persona pack cancel ${draft} to discard it`,
+    });
+  }
+  if (team) {
+    switch (team.state) {
+      case "missing-bound":
+        issues.push({
+          severity: "error",
+          message: `this session's persona team '${team.qualifiedName ?? "(unknown)"}' could not be loaded; run /persona team to choose a valid pack`,
+        });
+        break;
+      case "migration-required":
+        issues.push({
+          severity: "warning",
+          message: "this workspace's persona setup predates global persona packs; run /persona migrate inspect, then /persona migrate preview/apply, or run /persona team to choose an already-installed team",
+        });
+        break;
+      case "none":
+        issues.push({
+          severity: "warning",
+          message: "no persona team is bound for this session; run /persona team to choose one",
+        });
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    official: official.length,
+    custom: custom.length,
+    drafts: drafts.length,
+    default: defaultRecord?.defaultPack ?? null,
+    issues,
+  };
 }
 
 export function formatDoctorReport(result) {
@@ -95,28 +163,41 @@ export function formatDoctorReport(result) {
     "# Pi Persona Doctor",
     "",
     `Status: ${result.status}`,
-    `Backend: ${result.backend ?? "legacy"}`,
+    "Backend: native",
     "",
-    "## Dependencies",
-    result.backend === "native"
-      ? "- pi-subagents: optional (native backend selected)"
-      : dependencyLine("pi-subagents", result.dependencies.piSubagents),
-    ...(result.backend === "native" ? [
+    "## Native Checks",
+    "- static doctor: resolved baseline + agent built-in tool names",
+    "- live launch preflight: loaded skills, model, provider, and current authentication",
+  ];
+  if (result.globalPackSummary) {
+    const summary = result.globalPackSummary;
+    lines.push(
       "",
-      "## Native Checks",
-      "- static doctor: resolved baseline + agent built-in tool names",
-      "- live launch preflight: loaded skills, model, provider, and current authentication",
-    ] : []),
+      "## Global Persona Packs",
+      `Installed: ${summary.official} official, ${summary.custom} custom`,
+      `Default: ${summary.default ?? "none configured"}`,
+      `Pending drafts: ${summary.drafts}`,
+    );
+    if (result.team) {
+      lines.push(`Session team: ${result.team.state === "bound" ? result.team.qualifiedName : result.team.state}`);
+    }
+  }
+  lines.push(
     "",
     "## Project",
     `Agents: ${result.project.agents.length} launchable`,
-  ];
+  );
 
   const primaryState = getPrimaryGeneralistState(result.project);
-  lines.push(`Primary generalist: ${primaryState.effectivePrimary.length === 1 ? primaryState.effectivePrimary[0].name : primaryState.effectivePrimary.length}`);
-  lines.push(`Generalists: ${primaryState.generalists.length}`);
-  if (result.project.agents.length === 0) {
-    lines.push("", "No persona setup found. Run /persona onboard.");
+  lines.push(`Generalists [G]: ${primaryState.generalists.length}`);
+  if (result.packStatus) {
+    lines.push(`Persona packs: ${result.packStatus.packs.length} installed, ${result.packStatus.drafts.length} unfinished`);
+  }
+  const needsLegacyFoundationCheck = !result.team || result.team.state === "legacy";
+  if (!result.project.baseline && needsLegacyFoundationCheck) {
+    lines.push("", "No project foundation found. Run /persona onboard.");
+  } else if (result.project.agents.length === 0 && needsLegacyFoundationCheck) {
+    lines.push("", "No project-local persona packs installed. Run /persona pack list to browse and install global persona packs.");
   }
 
   if (result.project.baseline) {
@@ -134,15 +215,18 @@ export function formatDoctorReport(result) {
     }
   }
 
-  if (result.repairs?.length > 0) {
-    lines.push("", "## Repairs");
-    for (const repair of result.repairs) {
-      lines.push(`- kept ${repair.kept}; removed ${repair.removed.length} duplicate declaration(s)`);
-    }
-    lines.push("- reload Pi to unload the duplicate runtime copy");
-  }
-
   return lines.join("\n");
+}
+
+async function collectBackendIssues(root, options, issues) {
+  try {
+    await assertNativeBackend(root, options);
+  } catch (error) {
+    issues.push({
+      severity: "error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function collectNativeIssues(project, issues) {
@@ -157,127 +241,6 @@ function collectNativeIssues(project, issues) {
       });
     }
   }
-}
-
-export async function repairRuntimePackageDuplicates(root, options = {}) {
-  const agentDir = options.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi/agent");
-  const settings = [
-    await readSettings(path.join(agentDir, "settings.json"), "global"),
-    await readSettings(path.join(root, ".pi/settings.json"), "project"),
-  ].filter(Boolean);
-  const global = settings.find((entry) => entry.scope === "global");
-  const project = settings.find((entry) => entry.scope === "project" && entry.path !== global?.path);
-  const globalPackages = runtimePackages(global?.value.packages);
-  const projectPackages = runtimePackages(project?.value.packages);
-  const repairs = [];
-
-  if (globalPackages.length > 0) {
-    const kept = globalPackages.find((entry) => packageSource(entry) === RUNTIME_PACKAGES.piSubagents.source) ?? globalPackages[0];
-    await repairSettingsRuntimePackages(global, kept, repairs);
-    await repairSettingsRuntimePackages(project, undefined, repairs, kept);
-  } else if (projectPackages.length > 1) {
-    await repairSettingsRuntimePackages(project, projectPackages[0], repairs);
-  }
-
-  return repairs;
-}
-
-async function readSettings(settingsPath, scope) {
-  try {
-    const value = JSON.parse(await readFile(settingsPath, "utf8"));
-    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    return { path: settingsPath, scope, value };
-  } catch {
-    return undefined;
-  }
-}
-
-async function repairSettingsRuntimePackages(settings, kept, repairs, canonicalKept = kept) {
-  if (!settings || !Array.isArray(settings.value.packages)) return;
-  const configured = runtimePackages(settings.value.packages);
-  const keptIndex = kept ? configured.indexOf(kept) : -1;
-  const removed = configured.filter((_entry, index) => index !== keptIndex);
-  if (removed.length === 0) return;
-
-  let inserted = false;
-  const packages = [];
-  for (const entry of settings.value.packages) {
-    if (!isPiSubagentsPackage(entry)) {
-      packages.push(entry);
-    } else if (!inserted && kept) {
-      packages.push(kept);
-      inserted = true;
-    }
-  }
-
-  const backupPath = `${settings.path}.pi-personas.bak`;
-  const temporaryPath = `${settings.path}.${process.pid}.tmp`;
-  await copyFile(settings.path, backupPath);
-  await writeFile(temporaryPath, `${JSON.stringify({ ...settings.value, packages }, null, 2)}\n`, "utf8");
-  await rename(temporaryPath, settings.path);
-  repairs.push({
-    scope: settings.scope,
-    settingsPath: settings.path,
-    backupPath,
-    kept: canonicalKept,
-    removed,
-  });
-}
-
-function packageSource(entry) {
-  return typeof entry === "string" ? entry : entry?.source;
-}
-
-function dependencyLine(name, dependency) {
-  if (dependency?.ok) {
-    const configured = dependency.configured === true
-      ? " (configured)"
-      : dependency.configured === false
-        ? " (not configured in Pi settings)"
-        : "";
-    return `- ${name}: ${dependency.version} at ${dependency.path}${configured}`;
-  }
-  return `- ${name}: missing at ${dependency?.path ?? "unknown"}`;
-}
-
-function collectDependencyIssues(dependencies, issues) {
-  collectRuntimePackageIssue(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents, issues);
-}
-
-function collectRuntimePackageIssue(dependency, spec, issues) {
-  if (!dependency?.ok) {
-    issues.push({
-      severity: "warning",
-      message: `${spec.missing}; run \`${dependency?.packageSource ? `pi install ${dependency.packageSource}` : `pi install ${spec.source}`}\``,
-    });
-  }
-  if (dependency?.ok && dependency.configured === false) {
-    issues.push({
-      severity: "warning",
-      message: `${spec.name} installed but not configured in Pi settings; run \`pi install ${dependency.packageSource ?? spec.source}\``,
-    });
-  }
-  if (dependency?.ok && !versionAtLeast(dependency.version, PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION)) {
-    issues.push({
-      severity: "warning",
-      message: `${spec.name} ${dependency.version ?? "unknown"} is older than the supported round-table runtime; upgrade to >=${PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION}`,
-    });
-  }
-}
-
-function runtimeDependencyProblems(dependencies, minimumPiSubagentsVersion) {
-  return [
-    runtimeDependencyProblem(dependencies.piSubagents, RUNTIME_PACKAGES.piSubagents, minimumPiSubagentsVersion),
-  ].filter(Boolean);
-}
-
-function runtimeDependencyProblem(dependency, spec, minimumVersion) {
-  if (!dependency?.ok) return `${spec.name} is missing at ${dependency?.path ?? "unknown"}`;
-  if (dependency.configured === false) return `${spec.name} is installed but not configured in Pi settings`;
-  if (minimumVersion && !versionAtLeast(dependency.version, minimumVersion)) {
-    return `${spec.name} ${dependency.version ?? "unknown"} is incompatible; round-tables require >=${minimumVersion}`;
-  }
-  return "";
 }
 
 function collectParseIssues(project, issues) {
@@ -307,16 +270,6 @@ function collectDuplicateNameIssues(project, issues) {
   }
 }
 
-function collectGeneralistIssues(project, issues) {
-  const state = getPrimaryGeneralistState(project);
-  if (state.effectivePrimary.length !== 1) {
-    issues.push({
-      severity: "error",
-      message: formatPrimaryGeneralistError(state, "doctor"),
-    });
-  }
-}
-
 async function collectDocsIssues(project, issues) {
   const docsEntries = [];
   if (project.baseline) {
@@ -337,7 +290,7 @@ async function collectDocsIssues(project, issues) {
       issues.push({
         severity: "error",
         file: entry.owner,
-        message: `${entry.owner}: docs path must stay inside workspace: ${entry.docPath}`,
+        message: `${entry.owner}: library path must stay inside workspace: ${entry.docPath}`,
       });
       continue;
     }
@@ -347,17 +300,18 @@ async function collectDocsIssues(project, issues) {
         severity: "error",
         file: entry.owner,
         message: inspection.reason === "missing"
-          ? `${entry.owner}: docs path does not exist: ${entry.docPath}`
-          : `${entry.owner}: docs path must stay inside workspace: ${entry.docPath} (${inspection.reason})`,
+          ? `${entry.owner}: library path does not exist: ${entry.docPath}`
+          : `${entry.owner}: library path must stay inside workspace: ${entry.docPath} (${inspection.reason})`,
       });
       continue;
     }
 
     if (inspection.type === "directory" && inspection.deferred.length > 0 && !inspection.indexFile) {
+      const nestedFiles = `${inspection.deferred.length} nested library file${inspection.deferred.length === 1 ? "" : "s"}`;
       issues.push({
         severity: "warning",
         file: entry.owner,
-        message: `${entry.owner}: ${entry.docPath} has ${inspection.deferred.length} nested docs but no _index.md; run /persona index ${entry.docPath} or add an index manually for progressive discovery`,
+        message: `${entry.owner}: ${entry.docPath} has ${nestedFiles} but no _index.md; add one there or ask Pi to refresh the library index for progressive discovery`,
       });
     }
     for (const filePath of [...inspection.files, ...inspection.deferred]) {
@@ -370,7 +324,7 @@ async function collectDocsIssues(project, issues) {
         issues.push({
           severity: "error",
           file: filePath,
-          message: `${filePath}: unresolved template placeholder; finish onboarding with real operating context`,
+          message: `${filePath}: unresolved template placeholder; finish onboarding with real project context`,
         });
       }
     }
@@ -415,6 +369,41 @@ function collectSkillsIssues(project, issues) {
 
 function looksLikePath(value) {
   return /[\\/]/.test(value) || value.startsWith(".") || value.endsWith(".md");
+}
+
+// Project-local pack management commands (install/author/configure/update/
+// remove) were retired from the command surface in favor of global packs
+// (see /persona pack); an already-installed project-local pack still runs
+// exactly as before through the unbound ctx.cwd fallback, but there is no
+// longer a command that can act on these findings, so the messages below are
+// read-only status, not a call to action that no longer exists.
+function collectPackIssues(status, issues) {
+  for (const pack of status.packs) {
+    if (pack.configuration !== "complete") {
+      issues.push({
+        severity: "warning",
+        message: `project-local persona pack '${pack.name}' configuration was never marked complete; it still runs with its current files (project-local pack management has moved to global packs -- see /persona pack)`,
+      });
+    }
+    for (const problem of pack.problems) {
+      issues.push({
+        severity: "error",
+        message: `persona pack '${pack.name}': ${problem}`,
+      });
+    }
+    if (pack.update.includes("without version bump") || pack.update.startsWith("unavailable:")) {
+      issues.push({
+        severity: "warning",
+        message: `persona pack '${pack.name}' update source: ${pack.update}`,
+      });
+    }
+  }
+  for (const draft of status.drafts) {
+    issues.push({
+      severity: "warning",
+      message: `unfinished project-local persona pack draft '${draft}' at .pi/persona-pack-drafts/${draft}; project-local pack authoring has moved to global packs (see /persona pack create) -- remove this draft manually if it is no longer needed`,
+    });
+  }
 }
 
 function collectLegacyMetadataIssues(project, issues) {

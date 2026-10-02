@@ -10,14 +10,17 @@ import { DOC_INDEX_BLOCK_START, DOC_INDEX_FILE } from "./doc-index.js";
 import { formatYamlField, formatYamlScalar, uniqueStrings } from "./frontmatter.js";
 import { normalizeAgentName } from "./scaffold.js";
 
-export const DEFAULT_PERSONA_INIT_MANIFEST = "init-data/my-operating-layer.yaml";
+export const DEFAULT_PERSONA_INIT_MANIFEST = "init-data/my-persona-setup.yaml";
 
 const VALID_ROLES = new Set(["generalist", "specialist"]);
 const TEMPLATE_PLACEHOLDERS = [
+  "Add the user's project purpose, shared constraints, vocabulary, and recurring context here.",
   "Add the user's business facts, priorities, constraints, audience, products, services, channels, and recurring decisions here.",
   "Replace this with the specialist's operating notes.",
+  "Replace this with the specialist's working notes.",
   "Replace with the specialist's routing description.",
   "Replace this with the specialist's role, operating style, and expected output shape.",
+  "Replace this with the specialist's role, working style, and expected output shape.",
   "add the behavior or spec under test here",
   "list anything still undecided",
 ].map(normalizePlaceholderText);
@@ -144,8 +147,8 @@ export function formatPersonaInitManifestReport(result, options = {}) {
   if (result.mode === "draft" || result.mode === "resume") return formatDraftReport(result);
   if (result.mode === "status") return formatStatusReport(result);
   const title = result.mode === "apply"
-    ? `Pi Persona Init Applied${options.needsAttention ? " — Needs Attention" : ""}`
-    : "Pi Persona Init Plan";
+    ? `Project Foundation Applied${options.needsAttention ? " — Needs Attention" : ""}`
+    : "Project Foundation Plan";
   const lines = [
     `# ${title}`,
     "",
@@ -167,7 +170,7 @@ export function formatPersonaInitManifestReport(result, options = {}) {
   lines.push(
     "",
     result.mode === "plan"
-      ? `Next: run /persona init --from ${result.source}`
+      ? "Progress: ✓ Project purpose ─ ✓ Shared library ─ ● Approve foundation ─ ○ Choose a persona pack"
       : options.doctorIncluded
         ? "Persona doctor verification follows."
         : "Next: run /persona doctor",
@@ -178,31 +181,35 @@ export function formatPersonaInitManifestReport(result, options = {}) {
 function formatDraftReport(result) {
   const resuming = result.mode === "resume";
   return [
-    resuming ? "# Pi Persona Onboarding" : "# Pi Persona Init Draft",
+    "# Pi Persona Onboarding",
     "",
-    `${resuming ? "Using" : "Created"}: ${result.source}`,
+    `Progress saved in: ${result.source}`,
     `Project: ${result.projectName}`,
     "",
-    `${resuming ? "Resuming" : "Starting"} assisted setup interview. The manifest is a working draft; answer the setup questions in this chat before applying it.`,
+    `${resuming ? "Resuming" : "Starting"} a short guided project foundation. It usually takes 2–5 minutes.`,
     "",
-    "Next: continue the interview. The assistant will preview the plan before asking to apply it.",
+    "We will define what this project is for, identify useful shared context, then preview and verify the foundation.",
+    "Every persona can read the shared context in `library/shared/`.",
+    "After the foundation, ask in chat to install, copy or create a persona pack. Packs are global and provide direct personas, consultations, and round-tables.",
+    "",
+    "Your answers are saved so you can resume later. Nothing will be applied until you review and approve the proposed foundation.",
+    "",
+    "Next: answer the first setup question.",
   ].join("\n");
 }
 
 export function formatPersonaInitDraftAuthoringPrompt(result) {
   return [
-    `Help me shape the Pi Persona setup manifest at \`${result.source}\`.`,
+    `Help me set up this project's Pi Persona foundation using the saved draft at \`${result.source}\`.`,
     "",
-    "Treat me as a new user who does not yet know what to put where.",
-    "The default manifest filename is already chosen; ask for a short workspace or operating-layer name instead of asking me about YAML filenames.",
-    "Do not ask me to manually edit YAML.",
-    "Ask one question at a time, starting with what this workspace is for and what kind of help I want from the personas.",
-    "As I answer, edit the manifest for me using conservative defaults: one primary generalist, small specialists with clear routing descriptions, shared facts in docs/shared/, and specialist facts in docs/workstreams/<name>/.",
-    "Do not invent secrets, private business facts, unsupported skills, runtime-only fields, or legacy tools/consults/tags metadata.",
-    "If apply succeeds but doctor reports errors, say the files were applied and onboarding needs attention; do not claim the apply was rolled back.",
+    "Start by telling me this usually takes 2–5 minutes: define the project's purpose, choose what every persona should know, review the proposed foundation, and verify it.",
+    "Explain that `library/shared/` is project context every persona can read; it is not an access-control boundary.",
+    "Briefly mention that packs provide direct persona switching, one-to-one consultation, and pack-local round-tables.",
+    "Ask me one question at a time, beginning with what this workspace is for and what all future personas should know. Offer examples without assuming they apply, and let me seed shared context now or start empty.",
+    "Do not ask me to edit configuration files or design a team during foundation setup; persona packs provide the [G] lead and specialists.",
+    "Do not invent secrets, private business facts, or project context.",
     "",
-    `When the manifest has enough information, call persona_init with action: plan and source: ${result.source}. Summarize that plan and ask for explicit approval. Only after approval, call persona_init with action: apply, source: ${result.source}, and confirmed: true. The apply completes docs indexing, status, doctor verification, persona listing, and primary-generalist activation. Present that result and ask what I would like help with first.`,
-    "When explaining activation, use /persona use <name> or the direct slash command shown by /persona-list. Never use @name syntax.",
+    "Before anything is applied, show me the proposed files and `✓ Project purpose ─ ✓ Shared library ─ ● Approve foundation ─ ○ Choose a persona pack`, then wait for my explicit approval. After verification, offer to show me the available persona packs.",
   ].join("\n");
 }
 
@@ -217,15 +224,15 @@ function formatStatusReport(result) {
   for (const item of result.items) {
     lines.push(`[${item.state}] ${item.label}`);
   }
-  lines.push("", `[next] run ${nextStatusCommand(result.items)}`);
+  lines.push("", `[next] ${nextStatusAction(result.items)}`);
   return lines.join("\n");
 }
 
-function nextStatusCommand(items) {
-  if (items.some((item) => item.state !== "done" && item.label.startsWith("docs index: "))) {
-    return "/persona index --all";
+function nextStatusAction(items) {
+  if (items.some((item) => item.state !== "done" && item.label.startsWith("library index: "))) {
+    return "ask Pi to refresh the library indexes, then run /persona doctor";
   }
-  return "/persona doctor";
+  return "run /persona doctor";
 }
 
 function baseResult(mode, manifest, actions) {
@@ -239,7 +246,7 @@ function baseResult(mode, manifest, actions) {
 
 function projectNameFromOutputPath(outPath) {
   const baseName = path.basename(outPath).replace(/\.ya?ml$/i, "");
-  return normalizeAgentName(baseName) || "business-operating-layer";
+  return normalizeAgentName(baseName) || "persona-setup";
 }
 
 function renderStarterManifest(projectName) {
@@ -249,56 +256,27 @@ project:
 
 baseline:
   docs:
-    - docs/shared/
+    - library/shared/
   skills: []
   prompt: |
-    Shared operating context for every persona.
+    Shared project context for every persona.
 
-    Keep answers practical, concise, and grounded in the available docs. Answer
-    directly when shared context is enough. Consult specialists when the request
-    clearly needs their perspective.
+    Keep answers grounded in the available shared library and the user's stated
+    project purpose.
 
 docs:
   files:
-    docs/shared/_index.md: |
-      # Shared Docs Index
+    library/shared/_index.md: |
+      # Shared Library Index
 
-      - business-context.md: facts, priorities, constraints, and open questions.
-    docs/shared/business-context.md: |
-      # Business Context
+      - project-context.md: purpose, shared constraints, vocabulary, and open questions.
+    library/shared/project-context.md: |
+      # Project Context
 
-      Add the user's business facts, priorities, constraints, audience,
-      products, services, channels, and recurring decisions here.
-    docs/workstreams/example-specialist/_index.md: |
-      # Example Specialist Docs Index
+      Add the user's project purpose, shared constraints, vocabulary, and
+      recurring context here.
 
-      - brief.md: scope and output expectations.
-    docs/workstreams/example-specialist/brief.md: |
-      # Example Specialist Brief
-
-      Replace this with the specialist's operating notes.
-
-agents:
-  - name: generalist
-    role: generalist
-    primary: true
-    description: Routes requests, answers directly, and synthesizes specialist input.
-    docs: []
-    skills: []
-    prompt: |
-      You are the operating generalist. Answer directly when shared context is
-      enough. Consult the best-fit specialist when the request clearly needs a
-      specialist perspective.
-
-  - name: example-specialist
-    role: specialist
-    description: Replace with the specialist's routing description.
-    docs:
-      - docs/workstreams/example-specialist/
-    skills: []
-    prompt: |
-      You are the example specialist. Replace this with the specialist's role,
-      operating style, and expected output shape.
+agents: []
 `;
 }
 
@@ -312,7 +290,7 @@ async function docsIndexStatusItems(root, manifest) {
   for (const docPath of docDirs) {
     items.push({
       state: await hasManagedDocIndex(root, docPath) ? "done" : "todo",
-      label: `docs index: ${docPath}`,
+      label: `library index: ${docPath}`,
     });
   }
   return items;
@@ -354,23 +332,24 @@ function normalizeManifest(raw, sourcePath, root) {
   if (!isRecord(raw.baseline) || !nonEmpty(raw.baseline.prompt)) {
     throw new Error(`${sourcePath}: baseline.prompt is required`);
   }
-  if (!Array.isArray(raw.agents) || raw.agents.length === 0) {
-    throw new Error(`${sourcePath}: agents must contain at least one agent`);
+  if (raw.agents !== undefined && !Array.isArray(raw.agents)) {
+    throw new Error(`${sourcePath}: agents must be a list when provided`);
   }
 
-  const agents = raw.agents.map((agent, index) => normalizeAgent(agent, `${sourcePath}: agents[${index}]`, root));
+  const agents = (raw.agents ?? []).map((agent, index) => normalizeAgent(agent, `${sourcePath}: agents[${index}]`, root));
   const names = new Set();
   for (const agent of agents) {
     if (names.has(agent.name)) throw new Error(`${sourcePath}: duplicate agent name: ${agent.name}`);
     names.add(agent.name);
   }
-  const primaryGeneralists = agents.filter((agent) => agent.role === "generalist" && agent.primary === true);
-  if (primaryGeneralists.length !== 1) {
-    throw new Error(`${sourcePath}: exactly one generalist must have primary: true`);
-  }
-
-  const docsFiles = normalizeDocsFiles(raw.docs?.files, sourcePath, root);
-  const baselineDocs = normalizePathList(raw.baseline.docs, `${sourcePath}: baseline.docs`, root);
+  const docsFiles = ensurePersonaLibraries(
+    agents,
+    normalizeDocsFiles(raw.docs?.files, sourcePath, root),
+  );
+  const baselineDocs = uniqueStrings([
+    ...normalizePathList(raw.baseline.docs, `${sourcePath}: baseline.docs`, root),
+    "library/shared/",
+  ]);
   const manifest = {
     source: sourcePath,
     projectName: String(raw.project.name).trim(),
@@ -422,12 +401,13 @@ function normalizeAgent(raw, label, root) {
     throw new Error(`${label}: model must be a non-empty string when provided`);
   }
   const primary = raw.primary === true;
+  const docs = normalizePathList(raw.docs, `${label}.docs`, root);
   return {
     name,
     role,
     primary,
     description: String(raw.description).trim(),
-    docs: normalizePathList(raw.docs, `${label}.docs`, root),
+    docs: uniqueStrings([...docs, `library/personal/${name}/`]),
     skills: normalizeSkillList(raw.skills, `${label}.skills`),
     model: nonEmpty(raw.model) ? raw.model.trim() : "",
     prompt: String(raw.prompt).trim(),
@@ -447,6 +427,27 @@ function normalizeDocsFiles(value, sourcePath, root) {
       content: `${content.replace(/\r\n/g, "\n").trimEnd()}\n`,
     };
   });
+}
+
+function ensurePersonaLibraries(agents, docsFiles) {
+  const paths = new Set(docsFiles.map((file) => file.path));
+  if (!paths.has("library/shared/_index.md")) {
+    docsFiles.push({
+      path: "library/shared/_index.md",
+      content: "# Shared Library Index\n\nAdd project references here for every persona.\n",
+    });
+    paths.add("library/shared/_index.md");
+  }
+  for (const agent of agents) {
+    const indexPath = `library/personal/${agent.name}/_index.md`;
+    if (paths.has(indexPath)) continue;
+    docsFiles.push({
+      path: indexPath,
+      content: `# ${agent.name} Personal Library\n\nAdd references, preferences, examples, or working notes that should be supplied selectively to this persona. This scopes context; it is not an access-control boundary.\n`,
+    });
+    paths.add(indexPath);
+  }
+  return docsFiles;
 }
 
 function normalizePathList(value, label, root) {

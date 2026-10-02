@@ -6,7 +6,7 @@ repo.
 
 ## Reading Order
 
-1. [`../../README.md`](../../README.md) - user-facing install, quickstart, and
+1. [`../../README.md`](../../README.md) - user-facing installation, onboarding, and
    troubleshooting.
 2. [`blueprint.md`](blueprint.md) - product boundary, persona model, command
    surface, setup model, and settled decisions.
@@ -15,19 +15,22 @@ repo.
 4. [`../../init-data/README.md`](../../init-data/README.md) - manifest-backed project
    initialization inputs.
 5. [`../../RELEASING.md`](../../RELEASING.md) - release verification and publish procedure.
+6. [`migration-runbook.md`](migration-runbook.md) - converting an older
+   (pre-global-pack) project setup, in chat or with exact `/persona migrate`
+   commands, and how migration rollback differs from a package downgrade.
 
 ## Repo Docs Versus Generated Project Docs
 
 The `docs/` directory in this repository is maintainer documentation.
 
-Pi Persona also creates or references user-project docs such as:
+Pi Persona also creates or references user-project context libraries such as
+`library/shared/` and `library/personal/<persona>/`. Those paths appear in
+tests, templates, and generated project files because they are part of a
+user's workspace. They are not maintainer documentation folders.
 
-- `docs/shared/`
-- `docs/workstreams/<name>/`
-
-Those paths appear in tests, templates, and generated project files because
-they are part of a user's persona workspace. They are not additional maintainer
-documentation folders in this repository.
+Persona packs themselves are global: they live under Pi's agent directory
+(`<agentDir>/persona/{official,custom,drafts}`), not in any project, and
+nothing copies pack content into a project.
 
 ## Maintenance Rules
 

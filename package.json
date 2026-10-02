@@ -1,7 +1,7 @@
 {
   "name": "pi-personas",
-  "version": "0.3.0",
-  "description": "Project-local personas, consults, and round-tables for Pi Coding Agent.",
+  "version": "0.4.0",
+  "description": "Global persona teams for Pi Coding Agent, managed in chat: session-bound teams, consults, and round-tables.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -35,9 +35,10 @@
     "LICENSE",
     "README.md",
     "RELEASING.md",
-    "docs/_about_pi_persona/",
+    "docs/_about_pi_persona/*.md",
     "extensions/",
     "init-data/",
+    "packs/",
     "src/"
   ],
   "scripts": {

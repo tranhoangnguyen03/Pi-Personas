@@ -111,12 +111,17 @@ export async function createAgentScaffold(root, rawName, options = {}) {
   const role = normalizeRole(options.role ?? "specialist");
   const primary = await defaultPrimaryForRole(root, role);
   const warnings = buildPrimaryWarnings(agentName, primary);
+  const docs = [...new Set([
+    ...normalizeList(options.docs),
+    `library/personal/${agentName}/`,
+  ])];
   const relativePath = `.pi/agents/${agentName}.md`;
   const resolved = await resolveWorkspacePathForAccess(root, relativePath);
   if (!resolved.ok) throw new Error(`agent path must stay inside workspace: ${relativePath}`);
   const filePath = resolved.path;
   const content = renderAgentScaffold(agentName, {
     ...options,
+    docs,
     role,
     primary,
     title: titleFromName(rawName),
@@ -132,6 +137,14 @@ export async function createAgentScaffold(root, rawName, options = {}) {
     throw error;
   }
 
+  await writeScaffoldFile(
+    root,
+    `library/personal/${agentName}/_index.md`,
+    renderPersonalLibraryIndexScaffold(agentName),
+    [],
+    [],
+  );
+
   return {
     agentName,
     filePath,
@@ -142,7 +155,7 @@ export async function createAgentScaffold(root, rawName, options = {}) {
       role,
       primary,
       description: normalizeDescription(options.description ?? `${titleFromName(rawName)} specialist.`),
-      docs: normalizeList(options.docs),
+      docs,
       skills: normalizeList(options.skills),
     },
   };
@@ -160,11 +173,19 @@ export async function createPersonaProjectScaffold(root) {
       role: "generalist",
       primary: true,
       description: "Routes requests to the right specialist persona.",
+      docs: ["library/personal/generalist/"],
     }),
     created,
     skipped,
   );
-  await writeScaffoldFile(root, "docs/shared/_index.md", renderSharedDocsIndexScaffold(), created, skipped);
+  await writeScaffoldFile(root, "library/shared/_index.md", renderSharedLibraryIndexScaffold(), created, skipped);
+  await writeScaffoldFile(
+    root,
+    "library/personal/generalist/_index.md",
+    renderPersonalLibraryIndexScaffold("generalist"),
+    created,
+    skipped,
+  );
 
   return {
     created,
@@ -180,9 +201,9 @@ export function formatAgentScaffoldCreatedMessage(result) {
     `Launch: ${formatLaunchCommand(result.agentName)}`,
   ];
   if (result.options.docs.length > 0) {
-    lines.push(`Docs: ${result.options.docs.join(", ")}`);
+    lines.push(`Library: ${result.options.docs.join(", ")}`);
   } else {
-    lines.push("Docs: none");
+    lines.push("Library: none");
   }
   if (result.options.skills.length > 0) {
     lines.push(`Skills: ${result.options.skills.join(", ")}`);
@@ -247,10 +268,10 @@ async function writeScaffoldFile(root, relativePath, content, created, skipped) 
 
 function renderBaselineScaffold() {
   return `---
-docs: docs/shared/
+docs: library/shared/
 skills: []
 ---
-Shared operating context for every Pi Persona agent.
+Shared project context for every Pi Persona agent.
 
 Use the agent roster to decide when specialist help is useful. Keep consults
 focused, summarize relevant context, and prefer fresh context unless full
@@ -258,11 +279,20 @@ history is deliberately needed.
 `;
 }
 
-function renderSharedDocsIndexScaffold() {
-  return `# Shared Docs Index
+function renderSharedLibraryIndexScaffold() {
+  return `# Shared Library Index
 
-Add shared reference docs here. Keep this index current so agents can discover
+Add shared project references here. Keep this index current so agents can discover
 the folder progressively before opening deeper files.
+`;
+}
+
+function renderPersonalLibraryIndexScaffold(agentName) {
+  return `# ${titleFromName(agentName)} Personal Library
+
+Add references, preferences, examples, or working notes that should be supplied
+selectively to this persona. This scopes context; it is not an access-control
+boundary.
 `;
 }
 

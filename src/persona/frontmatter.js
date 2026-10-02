@@ -2,7 +2,7 @@ import { parseDocument, stringify } from "yaml";
 
 const FRONTMATTER_BOUNDARY = "---";
 
-const LIST_FIELDS = new Set(["tools", "docs", "skills", "consults", "tags"]);
+const LIST_FIELDS = new Set(["tools", "docs", "packDocs", "skills", "consults", "tags"]);
 
 export function parseFrontmatterDocument(source, filePath = "<memory>") {
   const normalized = source.replace(/\r\n/g, "\n");
