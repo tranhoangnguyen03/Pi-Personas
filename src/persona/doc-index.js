@@ -109,12 +109,12 @@ export async function createDocsIndex(root, options = {}) {
 
 export function formatDocsIndexReport(result) {
   const lines = [
-    "# Pi Persona Docs Index",
+    "# Pi Persona Library Index",
     "",
   ];
 
   if (!result.results || result.results.length === 0) {
-    lines.push("- no declared doc directories found");
+    lines.push("- no declared library directories found");
     return lines.join("\n");
   }
 
@@ -151,7 +151,7 @@ export function parsePersonaIndexArgs(args) {
   }
 
   if (all && target) {
-    throw new Error("Usage: /persona index [docs-dir] or /persona index --all");
+    throw new Error("Usage: /persona index [library-dir] or /persona index --all");
   }
 
   return {
@@ -163,15 +163,15 @@ export function parsePersonaIndexArgs(args) {
 async function writeDocsIndex(root, docPath) {
   const inspection = await inspectDocPath(root, docPath);
   if (!inspection.ok) {
-    throw new Error(`docs path cannot be indexed: ${docPath} (${inspection.reason})`);
+    throw new Error(`library path cannot be indexed: ${docPath} (${inspection.reason})`);
   }
   if (inspection.type !== "directory") {
-    throw new Error(`docs path is not a directory: ${docPath}`);
+    throw new Error(`library path is not a directory: ${docPath}`);
   }
 
   const resolved = await resolveWorkspacePathForAccess(root, docPath);
   if (!resolved.ok) {
-    throw new Error(`docs path cannot be indexed: ${docPath} (${resolved.reason})`);
+    throw new Error(`library path cannot be indexed: ${docPath} (${resolved.reason})`);
   }
   const indexPath = path.join(resolved.path, DOC_INDEX_FILE);
   const relativeIndexPath = toWorkspacePath(root, indexPath);
@@ -224,7 +224,7 @@ async function mergeManagedBlock(indexPath, docPath, managedBlock) {
       `# ${docPath} Index`,
       "",
       "This file is the navigation catalogue for Pi Persona progressive discovery.",
-      "Keep high-signal notes above the generated block. The generated block can be refreshed with `/persona index`.",
+      "Keep high-signal notes above the generated block. Pi Persona refreshes it after setup and pack changes; you can also ask Pi to refresh this library index.",
       "",
       managedBlock,
       "",

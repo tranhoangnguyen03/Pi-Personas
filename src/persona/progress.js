@@ -82,7 +82,7 @@ function createObservableProgressTracker(title, options = {}) {
       const facts = [
         `${formatDuration(summary.elapsedMs)} elapsed`,
         summary.idleMs < 1_000 ? "active now" : `active ${formatDuration(summary.idleMs)} ago`,
-        `${summary.toolCount} tools`,
+        `${summary.toolCount} tool${summary.toolCount === 1 ? "" : "s"}`,
       ];
       if (summary.sources > 0) facts.push(`${summary.sources} sources`);
       if (summary.recoverableErrors > 0) facts.push(`${summary.recoverableErrors} recoverable errors`);
@@ -137,7 +137,7 @@ function formatRoundtablePhase(entries, rosterSize) {
       "Specialists challenge, reinforce, or revise after peer reveal.",
     ];
   }
-  return ["Phase: moderator synthesis", "The primary generalist is resolving convergence, tension, and failures."];
+  return ["Phase: moderator synthesis", "The moderator is resolving convergence, tension, and failures."];
 }
 
 function formatRoundtableActivity(entries, _latest, agents, moderator) {
@@ -171,7 +171,7 @@ function resolveRoundtablePhase(entries, rosterSize) {
     return { id: "synthesis", next: "one managed moderator verdict" };
   }
   if (running?.index >= rosterSize || completedInRange(entries, 0, rosterSize) >= rosterSize) {
-    return { id: "round-2", next: "the primary generalist synthesizes the revised positions" };
+    return { id: "round-2", next: "the moderator synthesizes the revised positions" };
   }
   return { id: "round-1", next: "specialists see peer positions and revise" };
 }
@@ -204,7 +204,15 @@ function completedInRange(entries, start, end) {
 }
 
 function progressEntries(update) {
-  return Array.isArray(update?.progress) ? update.progress.filter(Boolean) : [];
+  if (Array.isArray(update?.progress)) return update.progress.filter(Boolean);
+  if (
+    update
+    && typeof update === "object"
+    && ["currentTool", "recentTools", "toolCount", "tokens"].some((key) => Object.hasOwn(update, key))
+  ) {
+    return [{ index: 0, status: "running", ...update }];
+  }
+  return [];
 }
 
 function finiteNumber(value) {

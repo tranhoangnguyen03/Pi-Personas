@@ -1,11 +1,12 @@
 import { resolveAgentScope } from "./resolver.js";
-import { getPrimaryGeneralistState } from "./agents.js";
+import { formatPersonaDisplayName } from "./agents.js";
 import { formatDocReadPreamble } from "./runtime.js";
 import { isDirectPersonaCommandName } from "./schema.js";
 
 export function buildAgentLaunchRequest(scope, options = {}) {
   return {
     agentName: scope.agent.name,
+    role: scope.agent.role,
     context: "active",
     userMessage: normalizeTask(options.task),
     docs: scope.docs,
@@ -17,8 +18,11 @@ export function buildAgentLaunchRequest(scope, options = {}) {
   };
 }
 
+// `options.project`/`options.packRoot`, when supplied by a bound pack
+// session, resolve the persona's scope from that retained snapshot instead of
+// rediscovering `root`'s `.pi/agents`; see resolveAgentScope.
 export async function resolveAgentLaunchRequest(root, agentName, options = {}) {
-  const scope = await resolveAgentScope(root, agentName);
+  const scope = await resolveAgentScope(root, agentName, options);
   return buildAgentLaunchRequest(scope, options);
 }
 
@@ -29,16 +33,18 @@ export function formatPersonaList(project) {
   ];
 
   if (project.agents.length === 0) {
-    lines.push("No persona setup found. Run /persona onboard.");
+    lines.push(project.baseline
+      ? "Project foundation is ready, but no persona packs are installed. Run /persona pack list or /persona pack author <name>."
+      : "No project foundation found. Run /persona onboard.");
     return lines.join("\n");
   }
 
-  const primaryPaths = new Set(getPrimaryGeneralistState(project).effectivePrimary.map((agent) => agent.relativePath));
   for (const agent of project.agents) {
-    const roleLabel = primaryPaths.has(agent.relativePath) ? `${agent.role} (primary)` : agent.role;
-    lines.push(`- ${agent.name} - ${roleLabel}`);
+    lines.push(`- ${formatPersonaDisplayName(agent)} - ${agent.role}`);
     lines.push(`  ${agent.description}`);
-    lines.push(`  docs: ${agent.docs.length ? agent.docs.join(", ") : "none"}`);
+    const pack = agent.relativePath.match(/^\.pi\/agents\/packs\/([^/]+)\//)?.[1];
+    if (pack) lines.push(`  pack: ${pack}`);
+    lines.push(`  library: ${agent.docs.length ? agent.docs.join(", ") : "none"}`);
     lines.push(`  skills: ${agent.skills.length ? agent.skills.join(", ") : "none"}`);
     lines.push(`  launch: ${isDirectPersonaCommandName(agent.name) ? `/${agent.name}` : `/persona use ${agent.name}`}`);
   }
@@ -58,7 +64,7 @@ function buildActivePersonaSystemPrompt(scope) {
     `Agent: ${scope.agent.name}`,
     `Role: ${scope.agent.role}`,
     `Description: ${scope.agent.description}`,
-    `Docs: ${scope.docs.length ? scope.docs.join(", ") : "none"}`,
+    `Library: ${scope.docs.length ? scope.docs.join(", ") : "none"}`,
     `Skills: ${scope.skills.length ? scope.skills.join(", ") : "none"}`,
     "",
     "Answer the user's current request directly as this persona, using the active Pi chat session.",
@@ -81,6 +87,9 @@ function buildActivePersonaSystemPrompt(scope) {
     "Use context: fork only when the request genuinely requires full conversation context.",
     "You, the requesting agent, must write the consult summary before calling the consultant.",
     "Call persona_consult with requester, consultant, context, summary, question, constraints, and expectedOutput.",
+    "When independent perspectives are useful, call multiple sibling persona_consult tools in parallel.",
+    "Consultants are leaf tasks and must never launch further persona consultations.",
+    "Use /persona-roundtable only when the specialists should see, challenge, or revise one another's positions.",
     "After persona_consult returns, synthesize the answer and preserve its compact provenance when useful.",
   ].join("\n"));
 

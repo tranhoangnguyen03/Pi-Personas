@@ -6,10 +6,15 @@ import { validatePersonaFile } from "./schema.js";
 
 const AGENT_DIR = ".pi/agents";
 
-export async function discoverPersonaProject(root) {
-  const resolvedAgentRoot = await resolveWorkspacePathForAccess(root, AGENT_DIR);
+// `agentDir` defaults to the workspace-relative `.pi/agents` layout every
+// existing caller expects. A retained pack snapshot (see pack-session.js)
+// reuses this same discovery/validation path against its own `agents/`
+// directory instead, by passing an explicit `agentDir`, so pack-sourced and
+// workspace-sourced personas share one parsing and schema-validation path.
+export async function discoverPersonaProject(root, agentDir = AGENT_DIR) {
+  const resolvedAgentRoot = await resolveWorkspacePathForAccess(root, agentDir);
   if (!resolvedAgentRoot.ok) {
-    throw new Error(`persona agent path must stay inside workspace: ${AGENT_DIR} (${resolvedAgentRoot.reason})`);
+    throw new Error(`persona agent path must stay inside workspace: ${agentDir} (${resolvedAgentRoot.reason})`);
   }
   const agentRoot = resolvedAgentRoot.path;
   const files = await listMarkdownFiles(agentRoot).catch((error) => {
@@ -66,6 +71,35 @@ export function findUniqueAgent(project, agentName, label = "agent") {
     throw new Error(`ambiguous ${label} name '${agentName}' in ${formatAgentPaths(matches)}`);
   }
   return matches[0];
+}
+
+export function formatPersonaDisplayName(agent) {
+  return agent?.role === "generalist" ? `[G] ${agent.name}` : agent?.name;
+}
+
+const PACK_AGENT_PATH_PREFIX = ".pi/agents/packs/";
+
+export function isPackScopedAgentPath(relativePath) {
+  return typeof relativePath === "string" && relativePath.startsWith(PACK_AGENT_PATH_PREFIX);
+}
+
+// The project's own pre-pack-redesign roster: agents materialized under
+// .pi/agents/packs/<pack>/ came from a global-pack install/author flow and
+// are never "legacy" content, no matter how old they are. Shared by
+// pack-migration.js's recognition/inspection so every migration path
+// describes exactly the same roster.
+export function legacyRosterAgents(project) {
+  return project.agents.filter((agent) => !isPackScopedAgentPath(agent.relativePath));
+}
+
+// A "genuine Pi Persona setup" worth migrating, not an arbitrary .pi/agents
+// directory: it must have its own top-level generalist. Specialist-only or
+// empty legacy rosters are not recognized (nothing to lead a migrated pack),
+// matching hasUnmigratedLegacyProject's pre-Task-6 heuristic exactly so
+// recognition never diverges between the session-start gate and migration
+// tooling.
+export function hasLegacyPersonaProject(project) {
+  return legacyRosterAgents(project).some((agent) => agent.role === "generalist");
 }
 
 export function assertUniqueAgentNames(project) {
@@ -133,6 +167,7 @@ function toAgent(file) {
     model: file.frontmatter.model,
     tools: file.frontmatter.tools ?? [],
     docs: file.frontmatter.docs ?? [],
+    packDocs: file.frontmatter.packDocs ?? [],
     skills: file.frontmatter.skills ?? [],
     consults: file.frontmatter.consults ?? [],
     tags: file.frontmatter.tags ?? [],

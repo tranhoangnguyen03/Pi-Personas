@@ -1,32 +1,44 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { isPiSubagentsInstalled } from "./dependencies.js";
-
-export const PERSONA_BACKENDS = new Set(["legacy", "native"]);
 export const NATIVE_CHILD_TOOLS = Object.freeze(["read", "grep", "find", "ls"]);
 export const NATIVE_BUILTIN_TOOLS = Object.freeze(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
 
-// No explicit PI_PERSONA_BACKEND and no .pi/persona.json backend preference: default to
-// legacy only when pi-subagents is installed (detectDependencies' `ok` flag, the same
-// existence check doctor uses), otherwise default to native. This is a one-shot pick at
-// selection time - it never re-checks or falls back once a backend starts executing.
-export async function resolvePersonaBackend(root, options = {}) {
-  const configured = options.env?.PI_PERSONA_BACKEND ?? process.env.PI_PERSONA_BACKEND;
-  if (configured) return requireBackend(configured, "PI_PERSONA_BACKEND");
+// Pi Persona runs natively only; the pi-subagents bridge backend has been retired.
+// An explicit "native" setting is a harmless no-op. Any other explicit value (most
+// notably the removed "legacy" backend) is diagnosed with an actionable error instead
+// of being silently ignored, so a stale setting from a pre-native install is surfaced.
+export async function assertNativeBackend(root, options = {}) {
+  const env = options.env ?? process.env;
+  const configuredEnv = env.PI_PERSONA_BACKEND;
+  if (configuredEnv !== undefined) {
+    requireNativeBackendValue(configuredEnv, "PI_PERSONA_BACKEND environment variable", "unset PI_PERSONA_BACKEND or set it to 'native'");
+  }
+
+  let configuredFile;
   try {
     const value = JSON.parse(await readFile(path.join(root, ".pi/persona.json"), "utf8"));
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error(".pi/persona.json must contain a JSON object");
     }
-    if (value.backend != null) return requireBackend(value.backend, ".pi/persona.json backend");
+    configuredFile = value.backend;
   } catch (error) {
     if (error?.code !== "ENOENT") {
       if (error instanceof SyntaxError) throw new Error(`Invalid .pi/persona.json: ${error.message}`);
       throw error;
     }
   }
-  return (await isPiSubagentsInstalled(root)) ? "legacy" : "native";
+  if (configuredFile !== undefined) {
+    requireNativeBackendValue(configuredFile, "backend field in .pi/persona.json", "remove the backend field, or set it to 'native'");
+  }
+}
+
+function requireNativeBackendValue(value, source, remediation) {
+  if (value === "native") return;
+  if (value === "legacy") {
+    throw new Error(`${source} is set to 'legacy', but Pi Persona has retired the pi-subagents backend and now runs natively only; ${remediation}.`);
+  }
+  throw new Error(`${source} must be 'native' (found ${JSON.stringify(value)}); Pi Persona runs natively only; ${remediation}.`);
 }
 
 export function resolveNativeChildTools(tools = []) {
@@ -49,63 +61,17 @@ export function snapshotForkBranch(sessionManager, toolCallId) {
   return branch.slice(0, inFlightIndex);
 }
 
-function requireBackend(value, source) {
-  if (typeof value === "string" && PERSONA_BACKENDS.has(value)) return value;
-  throw new Error(`${source} must be 'legacy' or 'native'`);
-}
-
-export function buildScopedSubagentParams(scope, task, options = {}) {
-  const context = options.context === "fork" ? "fork" : "fresh";
-  const params = {
-    agent: scope.agent.name,
-    task,
-    async: false,
-    agentScope: "both",
-    context,
-  };
-
-  applyReadOverride(params, scope);
-  applySkillOverride(params, scope);
-  applyModelOverride(params, scope);
-  return params;
-}
-
-export function buildScopedSubagentStep(scope, task) {
-  const step = {
-    agent: scope.agent.name,
-    task,
-  };
-
-  applyReadOverride(step, scope);
-  applySkillOverride(step, scope);
-  applyModelOverride(step, scope);
-  return step;
-}
-
-function applyReadOverride(target, scope) {
-  const reads = getRuntimeReads(scope);
-  if (reads.length === 0) return;
-  target.reads = reads;
-}
-
-function applyModelOverride(target, scope) {
-  if (!scope.agent.model) return;
-  target.model = scope.agent.model;
-}
-
-function applySkillOverride(target, scope) {
-  const skills = scope.skills ?? [];
-  if (skills.length === 0) return;
-  target.skill = skills;
-}
-
 export function formatDocReadPreamble(scope) {
   const reads = getRuntimeReads(scope);
   const manifestLines = formatDocManifest(scope);
+  const nestedManifestLines = formatNestedDocManifest(scope);
+  const indexSections = formatDocIndexContents(scope);
   const progressiveLines = formatProgressiveDiscoveryManifest(scope);
   if (
     reads.length === 0
     && manifestLines.length === 0
+    && nestedManifestLines.length === 0
+    && indexSections.length === 0
     && progressiveLines.length === 0
   ) {
     return "";
@@ -114,8 +80,23 @@ export function formatDocReadPreamble(scope) {
   const lines = reads.length > 0
     ? [`[Read from: ${reads.join(", ")}]`]
     : ["[Read from: none]"];
+  if (manifestLines.length > 0 || nestedManifestLines.length > 0) {
+    lines.push("", "Live library catalogue:");
+  }
   if (manifestLines.length > 0) {
-    lines.push("", "Resolved doc files:", ...manifestLines);
+    lines.push("Resolved doc files:", ...manifestLines);
+  }
+  if (nestedManifestLines.length > 0) {
+    lines.push("Nested doc files:", ...nestedManifestLines);
+  }
+  if (indexSections.length > 0) {
+    lines.push(
+      "",
+      "Library index contents:",
+      "These catalogues are already in context. Read a relevant non-index document before relying on its claims.",
+      "Do not infer a document's contents from its filename or index description.",
+      ...indexSections,
+    );
   }
   if (progressiveLines.length > 0) {
     lines.push("", "Progressive doc discovery:", ...progressiveLines);
@@ -137,6 +118,29 @@ function formatDocManifest(scope) {
   return manifest
     .filter((entry) => entry.files?.length > 0)
     .map((entry) => `- ${entry.declared}: ${entry.files.join(", ")}`);
+}
+
+function formatNestedDocManifest(scope) {
+  const manifest = scope.derived?.docManifest ?? [];
+  return manifest
+    .filter((entry) => entry.deferred?.length > 0)
+    .map((entry) => `- ${entry.declared}: ${entry.deferred.join(", ")}`);
+}
+
+function formatDocIndexContents(scope) {
+  const indexes = scope.derived?.docIndexes ?? [];
+  return indexes.flatMap((entry) => [
+    "",
+    `### ${entry.indexFile}`,
+    // The index's own body lists sibling paths relative to the directory
+    // containing it (see doc-index.js's relativeToDocPath), not to the
+    // index file itself or to any other root; stating that containing
+    // directory explicitly here avoids the model guessing a base for those
+    // relative names, without rewriting the index's own Markdown content.
+    `(paths below are relative to ${path.dirname(entry.indexFile)})`,
+    "",
+    entry.content.trim() || "(empty index)",
+  ]);
 }
 
 function formatProgressiveDiscoveryManifest(scope) {

@@ -1,7 +1,6 @@
 export { parseFrontmatterDocument, splitList, uniqueStrings } from "./frontmatter.js";
 export {
   buildConsultEnvelope,
-  extractConsultAnswer,
   formatConsultBridgeResult,
   formatConsultProvenance,
   resolveConsultLaunchRequest,
@@ -12,12 +11,14 @@ export {
   inspectDocPath,
   parsePersonaIndexArgs,
 } from "./doc-index.js";
-export { discoverPersonaProject } from "./agents.js";
+export {
+  discoverPersonaProject,
+  formatPersonaDisplayName,
+  getPrimaryGeneralistState,
+} from "./agents.js";
 export {
   assertPersonaRuntimeReady,
   formatDoctorReport,
-  PI_SUBAGENTS_ROUNDTABLE_MINIMUM_VERSION,
-  repairRuntimePackageDuplicates,
   runDoctor,
 } from "./doctor.js";
 export { buildAgentLaunchRequest, formatPersonaList, resolveAgentLaunchRequest } from "./launch.js";
@@ -32,14 +33,50 @@ export {
   planPersonaInitFromManifest,
   statusPersonaInitFromManifest,
 } from "./init-manifest.js";
+export {
+  formatGlobalPersonaPackReport,
+  formatPersonaPackReport,
+  resolveInstalledQualifiedPersonaPackName,
+  runGlobalPersonaPackAction,
+  runPersonaPackAction,
+} from "./pack-lifecycle.js";
+export {
+  applyCustomPersonaPackDraft,
+  cancelCustomPersonaPackDraft,
+  deleteCustomPersonaPack,
+  forkPersonaPack,
+  installOfficialPersonaPack,
+  listGlobalPersonaPacks,
+  previewCustomPersonaPackDraft,
+  stageCustomPersonaPackDraft,
+  uninstallOfficialPersonaPack,
+  updateOfficialPersonaPack,
+} from "./global-pack-store.js";
+export {
+  applyPersonaMigration,
+  detectMigrationState,
+  formatMigrationInspectionReport,
+  formatMigrationPreviewReport,
+  formatMigrationStatusReport,
+  inspectLegacyMigration,
+  invalidateMigrationMarker,
+  recordMigrationRollback,
+  previewPersonaMigration,
+  readMigrationRecord,
+} from "./pack-migration.js";
+export {
+  inspectTeamEntries,
+  loadPackSession,
+  readGlobalDefaultPack,
+  TEAM_BINDING_ENTRY_TYPE,
+  TEAM_PENDING_ENTRY_TYPE,
+  writeGlobalDefaultPack,
+} from "./pack-session.js";
 export { sendPersonaOutput } from "./pi-output.js";
 export { createConsultProgressTracker, createRoundtableProgressTracker } from "./progress.js";
 export { cancelPersonaChildren, runPersonaChild } from "./child-runner.js";
-export { resolveAgentPreview, resolveAgentScope } from "./resolver.js";
+export { resolveAgentPreview, resolveAgentScope, resolveScopedAgentDocs } from "./resolver.js";
 export {
-  buildLegacyRoundtableParams,
-  extractRoundtableAnswer,
-  formatRoundtableBridgeFailure,
   formatRoundtableBridgeResult,
   formatRoundtableRosterPreview,
   runNativeRoundtable,
@@ -47,13 +84,10 @@ export {
   resolveRoundtableSelectionRequest,
 } from "./roundtable.js";
 export {
-  buildScopedSubagentParams,
-  buildScopedSubagentStep,
+  assertNativeBackend,
   NATIVE_BUILTIN_TOOLS,
   NATIVE_CHILD_TOOLS,
-  PERSONA_BACKENDS,
   resolveNativeChildTools,
-  resolvePersonaBackend,
   snapshotForkBranch,
 } from "./runtime.js";
 export {
@@ -71,4 +105,3 @@ export {
   validatePersonaFile,
   validatePersonaSchema,
 } from "./schema.js";
-export { runSubagentBridgeRequest, SUBAGENT_SLASH_EVENTS } from "./subagent-bridge.js";

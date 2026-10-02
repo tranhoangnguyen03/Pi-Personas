@@ -1,6 +1,6 @@
 const ALLOWED_ROLES = new Set(["generalist", "specialist", "runtime"]);
 const AGENT_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
-const LIST_FIELDS = ["docs", "skills", "tools", "consults", "tags"];
+const LIST_FIELDS = ["docs", "packDocs", "skills", "tools", "consults", "tags"];
 const CONTROL_AGENT_FIELDS = ["name", "description", "role", "primary", "model"];
 
 export const DIRECT_PERSONA_RESERVED_NAMES = new Set([
